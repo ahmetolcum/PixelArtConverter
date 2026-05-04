@@ -55,7 +55,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install PySide6 numpy Pillow scikit-image scikit-learn scipy "rembg[cpu]"
+          pip install -r requirements.txt
 
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm pixel_art_converter_qt.spec

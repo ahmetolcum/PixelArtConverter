@@ -1,0 +1,7 @@
+PySide6
+numpy
+Pillow
+scikit-image
+scikit-learn
+scipy
+rembg[cpu]
