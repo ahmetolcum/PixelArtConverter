@@ -15,7 +15,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION=$(grep -E '^__version__' pixel_art_converter.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+VERSION=$(grep -E '^__version__' core.py | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 echo "▶ Building Pixel Art Converter v${VERSION}"
 
 APP_NAME="Pixel Art Converter"
