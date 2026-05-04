@@ -114,11 +114,25 @@ You only need to do **one** of the following the **first time** you launch. Afte
 
 **Option C — Terminal (Sequoia / Tahoe, when the "damaged" message appears):**
 
+If you installed to **`/Applications/`** (system-wide, the usual place from drag-to-Applications):
+
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Pixel Art Converter.app"
 ```
 
-This removes the quarantine flag set on downloads. Then double-click the app — it opens normally.
+If you installed to **`~/Applications/`** (your user folder):
+
+```bash
+xattr -dr com.apple.quarantine ~/Applications/Pixel\ Art\ Converter.app
+```
+
+If you're not sure where it is, this finds it and clears the flag wherever it lives:
+
+```bash
+sudo xattr -dr com.apple.quarantine "$(mdfind 'kMDItemFSName == "Pixel Art Converter.app"' | head -1)"
+```
+
+Any of these removes the quarantine flag set on downloads. Then double-click the app — it opens normally.
 
 This is **standard for unsigned indie apps**. The app does nothing it doesn't claim — all source is in this repo. The signed v1.1 release will eliminate the warning.
 
