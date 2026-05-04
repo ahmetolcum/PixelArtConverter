@@ -22,24 +22,35 @@ APP_NAME="Pixel Art Converter"
 APP_PATH="dist/${APP_NAME}.app"
 DMG_PATH="build/PixelArtConverter-${VERSION}.dmg"
 
-# 1. Compile docs/AppIcon.icon → AppIcon.icns + Assets.car via actool.
-#    actool emits both: a flat .icns (used on Big Sur–Sonoma) and an
-#    Assets.car holding the layered icon Tahoe styles dynamically.
-echo "▶ Compiling docs/AppIcon.icon via actool"
-ICON_OUT=build/icon-compile
-rm -rf "$ICON_OUT" build/AppIcon.icns build/Assets.car build/icon-info.plist
-mkdir -p "$ICON_OUT"
-xcrun actool --compile "$ICON_OUT" \
-  --platform macosx \
-  --minimum-deployment-target 11.0 \
-  --app-icon AppIcon \
-  --output-partial-info-plist build/icon-info.plist \
-  --output-format human-readable-text \
-  --errors --warnings \
-  docs/AppIcon.icon > /dev/null
-cp "$ICON_OUT/AppIcon.icns" build/AppIcon.icns
-cp "$ICON_OUT/Assets.car"   build/Assets.car
-rm -rf "$ICON_OUT"
+# 1. Source the icon assets. Tahoe .icon → Assets.car compilation needs
+#    Xcode 26 (only available on macOS 26+ runners). For portability across
+#    CI macOS-15 runners and local macOS 26 boxes, prefer the pre-compiled
+#    assets checked into docs/compiled-icons/. When the source .icon
+#    changes, regenerate them locally via the actool command below and
+#    copy the outputs into docs/compiled-icons/.
+mkdir -p build
+COMPILED_DIR=docs/compiled-icons
+if [ -f "$COMPILED_DIR/AppIcon.icns" ] && [ -f "$COMPILED_DIR/Assets.car" ]; then
+  echo "▶ Using pre-compiled icon assets from $COMPILED_DIR/"
+  cp "$COMPILED_DIR/AppIcon.icns" build/AppIcon.icns
+  cp "$COMPILED_DIR/Assets.car"   build/Assets.car
+else
+  echo "▶ Compiling docs/AppIcon.icon via actool (committed assets missing)"
+  ICON_OUT=build/icon-compile
+  rm -rf "$ICON_OUT" build/AppIcon.icns build/Assets.car build/icon-info.plist
+  mkdir -p "$ICON_OUT"
+  xcrun actool --compile "$ICON_OUT" \
+    --platform macosx \
+    --minimum-deployment-target 11.0 \
+    --app-icon AppIcon \
+    --output-partial-info-plist build/icon-info.plist \
+    --output-format human-readable-text \
+    --errors --warnings \
+    docs/AppIcon.icon > /dev/null
+  cp "$ICON_OUT/AppIcon.icns" build/AppIcon.icns
+  cp "$ICON_OUT/Assets.car"   build/Assets.car
+  rm -rf "$ICON_OUT"
+fi
 
 # 2. py2app
 echo "▶ py2app — building .app (this can take a few minutes)…"
