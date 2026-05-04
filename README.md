@@ -1,6 +1,5 @@
 <div align="center">
 
-<!-- Replace this with your generated logo (PNG, ~256px) once you have it -->
 <img src="docs/logo.png" alt="Pixel Art Converter" width="256"/>
 
 # Pixel Art Converter
@@ -16,7 +15,6 @@
 
 <br/>
 
-<!-- Replace with a real screenshot or short demo gif -->
 <img src="docs/screenshot.png" alt="App screenshot" width="900"/>
 
 </div>
