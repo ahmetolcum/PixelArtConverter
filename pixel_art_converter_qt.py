@@ -13,6 +13,8 @@ Run from source:
     python3 pixel_art_converter_qt.py
 """
 
+from __future__ import annotations
+
 import io
 import os
 import sys
@@ -108,20 +110,33 @@ class ImagePreview(QtWidgets.QGraphicsView):
         self.setDragMode(self.DragMode.ScrollHandDrag)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setBackgroundBrush(self._make_checker())
         self._pixitem: QtWidgets.QGraphicsPixmapItem | None = None
+        self._refresh_checker()
+
+    def _refresh_checker(self):
+        win_color = self.palette().color(QtGui.QPalette.ColorRole.Base)
+        is_dark = (win_color.red() + win_color.green() + win_color.blue()) / 3 < 128
+        if is_dark:
+            light, dark = QtGui.QColor(60, 60, 60), QtGui.QColor(40, 40, 40)
+        else:
+            light, dark = QtGui.QColor(220, 220, 220), QtGui.QColor(180, 180, 180)
+        self.setBackgroundBrush(self._make_checker(light, dark))
 
     @staticmethod
-    def _make_checker() -> QtGui.QBrush:
+    def _make_checker(c1: QtGui.QColor, c2: QtGui.QColor) -> QtGui.QBrush:
         size = 16
         pix = QtGui.QPixmap(size, size)
-        pix.fill(QtGui.QColor(220, 220, 220))
+        pix.fill(c1)
         p = QtGui.QPainter(pix)
-        p.fillRect(0, 0, size // 2, size // 2,    QtGui.QColor(180, 180, 180))
-        p.fillRect(size // 2, size // 2, size // 2, size // 2,
-                   QtGui.QColor(180, 180, 180))
+        p.fillRect(0, 0, size // 2, size // 2, c2)
+        p.fillRect(size // 2, size // 2, size // 2, size // 2, c2)
         p.end()
         return QtGui.QBrush(pix)
+
+    def changeEvent(self, ev: QtCore.QEvent):
+        if ev.type() == QtCore.QEvent.Type.PaletteChange:
+            self._refresh_checker()
+        super().changeEvent(ev)
 
     def setImage(self, img: Image.Image | None):
         self._scene.clear()
@@ -139,19 +154,34 @@ class ImagePreview(QtWidgets.QGraphicsView):
         if self._pixitem is not None:
             self.fitInView(self._pixitem, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
+    def zoom_by(self, factor: float):
+        if self._pixitem is None:
+            return
+        new_scale = self.transform().m11() * factor
+        if SCALE_MIN <= new_scale <= SCALE_MAX:
+            self.scale(factor, factor)
+
+    def zoom_in(self):  self.zoom_by(1.25)
+    def zoom_out(self): self.zoom_by(0.8)
+
     def wheelEvent(self, ev: QtGui.QWheelEvent):
-        if ev.modifiers() & (QtCore.Qt.KeyboardModifier.ControlModifier
-                             | QtCore.Qt.KeyboardModifier.MetaModifier):
-            factor = 1.25 if ev.angleDelta().y() > 0 else 0.8
-            new_scale = self.transform().m11() * factor
-            if SCALE_MIN <= new_scale <= SCALE_MAX:
-                self.scale(factor, factor)
-            ev.accept()
-        else:
-            super().wheelEvent(ev)
+        factor = 1.25 if ev.angleDelta().y() > 0 else 0.8
+        self.zoom_by(factor)
+        ev.accept()
 
 
 # ── Worker: runs core.make_pixel_art on a background thread ───────────
+
+class _WheelGuard(QtCore.QObject):
+    """Drops wheel events on installed widgets so a parent scroll area gets
+    them instead. Stops sliders / spinboxes / combos from changing value
+    when the user is just scrolling the panel past them."""
+    def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
+        if ev.type() == QtCore.QEvent.Type.Wheel:
+            ev.ignore()
+            return True
+        return False
+
 
 class ConvertWorker(QtCore.QObject):
     finished = QtCore.Signal(object, list, str)   # result PIL, frames list, status
@@ -375,6 +405,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._loaded_lospec: dict = {}           # name -> hex_list (user-loaded)
         self._sheet_cols = 1
         self._sheet_rows = 1
+        self._busy = False
 
         self._build_ui()
         self._build_menu()
@@ -409,7 +440,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_ui(self):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_controls_panel())
+        self._controls_panel = self._build_controls_panel()
+        splitter.addWidget(self._controls_panel)
         splitter.addWidget(self._build_preview_panel())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -517,12 +549,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.convert_btn = QtWidgets.QPushButton("Convert")
         self.convert_btn.clicked.connect(self.do_convert)
         self.convert_btn.setDefault(True)
+        self.convert_btn.setProperty("accent", True)
         self.save_btn = QtWidgets.QPushButton("Save Output…")
         self.save_btn.clicked.connect(self.on_save)
         cv.addWidget(self.convert_btn); cv.addWidget(self.save_btn)
         v.addLayout(cv)
 
         v.addStretch()
+
+        # Stop wheel events from changing slider / spinbox / combo values
+        # when the user is just scrolling the panel past them.
+        self._wheel_guard = _WheelGuard(self)
+        for w in host.findChildren(QtWidgets.QAbstractSpinBox) \
+               + host.findChildren(QtWidgets.QSlider) \
+               + host.findChildren(QtWidgets.QComboBox):
+            w.installEventFilter(self._wheel_guard)
+            w.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
 
         # Wire up auto-convert triggers (debounced)
         for w in [self.w_spin, self.h_spin, self.colors_spin]:
@@ -531,7 +573,12 @@ class MainWindow(QtWidgets.QMainWindow):
             chk.toggled.connect(self._schedule_convert)
         self.bg_combo.currentTextChanged.connect(self._schedule_convert)
         for s in [self.brightness_slider, self.contrast_slider, self.saturation_slider]:
-            s.valueChanged.connect(self._schedule_convert)
+            # Trigger only when the user finishes dragging (mouse release) or
+            # uses keyboard arrows (valueChanged with the handle not held down).
+            s.sliderReleased.connect(self._schedule_convert)
+            s.valueChanged.connect(
+                lambda _v, sl=s: None if sl.isSliderDown() else self._schedule_convert()
+            )
         self.palette_combo.currentTextChanged.connect(self._schedule_convert)
 
         return scroll
@@ -540,20 +587,51 @@ class MainWindow(QtWidgets.QMainWindow):
         host = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(host); v.setContentsMargins(8, 8, 8, 8); v.setSpacing(8)
 
-        tabs = QtWidgets.QTabWidget()
         self.original_view = ImagePreview()
         self.output_view   = ImagePreview()
-        tabs.addTab(self.original_view, "Original")
-        tabs.addTab(self.output_view,   "Pixel art")
-        tabs.setCurrentIndex(1)
-        v.addWidget(tabs)
-        self.tabs = tabs
+
+        split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        split.addWidget(self._labeled_view("Original",  self.original_view))
+        split.addWidget(self._labeled_view("Pixel art", self.output_view))
+        split.setSizes([1, 1])
+        split.setChildrenCollapsible(False)
+        v.addWidget(split, 1)
 
         # Quick info row
         self.info_label = QtWidgets.QLabel("")
-        self.info_label.setStyleSheet("color: gray;")
+        self.info_label.setStyleSheet("color: palette(placeholder-text);")
         v.addWidget(self.info_label)
 
+        return host
+
+    @staticmethod
+    def _labeled_view(title: str, view: "ImagePreview") -> QtWidgets.QWidget:
+        host = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(host)
+        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(4)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        lbl = QtWidgets.QLabel(title)
+        f = lbl.font(); f.setBold(True); lbl.setFont(f)
+        header.addStretch(1)
+        header.addWidget(lbl)
+        header.addStretch(1)
+
+        def _mk(text: str, tip: str, slot) -> QtWidgets.QToolButton:
+            b = QtWidgets.QToolButton()
+            b.setText(text); b.setToolTip(tip)
+            b.setAutoRaise(True)
+            b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(slot)
+            return b
+
+        header.addWidget(_mk("−",   "Zoom out",  view.zoom_out))
+        header.addWidget(_mk("+",   "Zoom in",   view.zoom_in))
+        header.addWidget(_mk("Fit", "Fit to view", view.fit))
+
+        v.addLayout(header)
+        v.addWidget(view, 1)
         return host
 
     @staticmethod
@@ -603,10 +681,12 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- Drag & drop ----------------------------------------------------
 
     def dragEnterEvent(self, ev: QtGui.QDragEnterEvent):
-        if ev.mimeData().hasUrls():
+        if not self._busy and ev.mimeData().hasUrls():
             ev.acceptProposedAction()
 
     def dropEvent(self, ev: QtGui.QDropEvent):
+        if self._busy:
+            return
         urls = ev.mimeData().urls()
         if not urls:
             return
@@ -726,7 +806,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- Convert flow ---------------------------------------------------
 
     def _schedule_convert(self, *_):
-        if not self._frames:
+        if not self._frames or self._busy:
             return
         self._debounce.start()
 
@@ -756,18 +836,29 @@ class MainWindow(QtWidgets.QMainWindow):
             "saturation":   self.saturation_slider.value(),
         }
 
+    def _set_busy(self, busy: bool):
+        self._busy = busy
+        self._controls_panel.setEnabled(not busy)
+        self.menuBar().setEnabled(not busy)
+        if busy:
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        else:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
     @QtCore.Slot()
     def do_convert(self):
+        if self._busy:
+            return
         args = self._gather_args()
         if args is None:
             return
-        self.convert_btn.setEnabled(False)
+        self._set_busy(True)
         self.statusBar().showMessage("Converting…")
         self.convert_requested.emit(args)
 
     @QtCore.Slot(object, list, str)
     def _on_convert_done(self, result, frames, status):
-        self.convert_btn.setEnabled(True)
+        self._set_busy(False)
         self._result_img = result
         self._result_frames = frames
         self.output_view.setImage(result)
@@ -777,11 +868,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if status == "fallback":
             msg += " (BG removal fell back: original passed through)"
         self.statusBar().showMessage(msg)
-        self.tabs.setCurrentIndex(1)
 
     @QtCore.Slot(str)
     def _on_convert_failed(self, err: str):
-        self.convert_btn.setEnabled(True)
+        self._set_busy(False)
         QtWidgets.QMessageBox.critical(self, "Conversion failed", err)
         self.statusBar().showMessage("Conversion failed")
 
@@ -794,12 +884,199 @@ class MainWindow(QtWidgets.QMainWindow):
 
 # ── Entry point ───────────────────────────────────────────────────────
 
+def _build_qss(dark: bool) -> str:
+    if dark:
+        accent          = "#60CDFF"
+        accent_hover    = "#82D6FF"
+        accent_pressed  = "#3FB8F0"
+        accent_text     = "#000000"
+        border          = "rgba(255,255,255,0.10)"
+        border_strong   = "rgba(255,255,255,0.20)"
+        hover_bg        = "rgba(255,255,255,0.06)"
+        pressed_bg      = "rgba(255,255,255,0.10)"
+        disabled_text   = "rgba(255,255,255,0.40)"
+        slider_groove   = "rgba(255,255,255,0.15)"
+        slider_handle   = "#E6E6E6"
+        slider_h_border = "rgba(0,0,0,0.40)"
+    else:
+        accent          = "#0067C0"
+        accent_hover    = "#1975D2"
+        accent_pressed  = "#00569C"
+        accent_text     = "#FFFFFF"
+        border          = "rgba(0,0,0,0.10)"
+        border_strong   = "rgba(0,0,0,0.20)"
+        hover_bg        = "rgba(0,0,0,0.04)"
+        pressed_bg      = "rgba(0,0,0,0.08)"
+        disabled_text   = "rgba(0,0,0,0.35)"
+        slider_groove   = "rgba(0,0,0,0.15)"
+        slider_handle   = "#FFFFFF"
+        slider_h_border = "rgba(0,0,0,0.30)"
+
+    return f"""
+* {{ font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", system-ui, sans-serif; }}
+
+QMainWindow {{ background: palette(window); }}
+QScrollArea {{ border: none; background: transparent; }}
+
+QPushButton {{
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid {border};
+    background: palette(button);
+}}
+QPushButton:hover    {{ background: {hover_bg}; }}
+QPushButton:pressed  {{ background: {pressed_bg}; }}
+QPushButton:disabled {{ color: {disabled_text}; }}
+
+QPushButton[accent="true"] {{
+    color: {accent_text};
+    background: {accent};
+    border: 1px solid {accent};
+}}
+QPushButton[accent="true"]:hover    {{ background: {accent_hover}; }}
+QPushButton[accent="true"]:pressed  {{ background: {accent_pressed}; }}
+QPushButton[accent="true"]:disabled {{ color: {disabled_text}; }}
+
+QComboBox, QSpinBox, QLineEdit, QPlainTextEdit, QTextEdit {{
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid {border_strong};
+    background: palette(base);
+    color: palette(text);
+    selection-background-color: {accent};
+}}
+QComboBox:focus, QSpinBox:focus, QLineEdit:focus,
+QPlainTextEdit:focus, QTextEdit:focus {{ border: 1px solid {accent}; }}
+
+QCheckBox {{ spacing: 8px; padding: 2px 0; }}
+QCheckBox::indicator {{
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    border: 1px solid {border_strong};
+    background: palette(base);
+}}
+QCheckBox::indicator:hover   {{ border: 1px solid {accent}; }}
+QCheckBox::indicator:checked {{
+    background: {accent};
+    border: 1px solid {accent};
+    image: none;
+}}
+
+QSlider::groove:horizontal {{
+    height: 4px;
+    background: {slider_groove};
+    border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    width: 16px; height: 16px;
+    margin: -7px 0;
+    border-radius: 8px;
+    background: {slider_handle};
+    border: 1px solid {slider_h_border};
+}}
+QSlider::handle:horizontal:hover {{ border: 4px solid {accent}; }}
+
+QGraphicsView {{
+    border: 1px solid {border};
+    border-radius: 8px;
+    background: palette(base);
+}}
+
+QStatusBar {{ border-top: 1px solid {border}; }}
+
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:horizontal {{ width: 6px; }}
+QSplitter::handle:vertical   {{ height: 6px; }}
+
+QToolTip {{
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid {border_strong};
+    background: palette(base);
+    color: palette(text);
+}}
+"""
+
+
+def _build_palette(dark: bool) -> QtGui.QPalette:
+    pal = QtGui.QPalette()
+    if dark:
+        window = QtGui.QColor(32, 32, 32)
+        base   = QtGui.QColor(43, 43, 43)
+        alt    = QtGui.QColor(50, 50, 50)
+        text   = QtGui.QColor(240, 240, 240)
+        disabled_text = QtGui.QColor(140, 140, 140)
+        button = QtGui.QColor(45, 45, 45)
+        highlight = QtGui.QColor(96, 205, 255)
+        highlight_text = QtGui.QColor(0, 0, 0)
+    else:
+        window = QtGui.QColor(243, 243, 243)
+        base   = QtGui.QColor(255, 255, 255)
+        alt    = QtGui.QColor(247, 247, 247)
+        text   = QtGui.QColor(20, 20, 20)
+        disabled_text = QtGui.QColor(140, 140, 140)
+        button = QtGui.QColor(252, 252, 252)
+        highlight = QtGui.QColor(0, 103, 192)
+        highlight_text = QtGui.QColor(255, 255, 255)
+
+    Role = QtGui.QPalette.ColorRole
+    Group = QtGui.QPalette.ColorGroup
+    pal.setColor(Role.Window, window)
+    pal.setColor(Role.WindowText, text)
+    pal.setColor(Role.Base, base)
+    pal.setColor(Role.AlternateBase, alt)
+    pal.setColor(Role.ToolTipBase, base)
+    pal.setColor(Role.ToolTipText, text)
+    pal.setColor(Role.Text, text)
+    pal.setColor(Role.Button, button)
+    pal.setColor(Role.ButtonText, text)
+    pal.setColor(Role.Highlight, highlight)
+    pal.setColor(Role.HighlightedText, highlight_text)
+    pal.setColor(Role.PlaceholderText, disabled_text)
+    pal.setColor(Group.Disabled, Role.Text, disabled_text)
+    pal.setColor(Group.Disabled, Role.ButtonText, disabled_text)
+    pal.setColor(Group.Disabled, Role.WindowText, disabled_text)
+    return pal
+
+
+def apply_theme(app: QtWidgets.QApplication, dark: bool):
+    app.setPalette(_build_palette(dark))
+    app.setStyleSheet(_build_qss(dark))
+
+
 def main():
     QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(
         QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Pixel Art Converter")
     app.setApplicationVersion(core.__version__)
+
+    if "windows11" in QtWidgets.QStyleFactory.keys():
+        app.setStyle("windows11")
+    elif "Fusion" in QtWidgets.QStyleFactory.keys():
+        app.setStyle("Fusion")
+
+    families = QtGui.QFontDatabase.families()
+    for fam in ("Segoe UI Variable Display", "Segoe UI", "Inter"):
+        if fam in families:
+            app.setFont(QtGui.QFont(fam, 10))
+            break
+
+    def _is_dark() -> bool:
+        hints = app.styleHints()
+        scheme = getattr(hints, "colorScheme", None)
+        if callable(scheme):
+            return scheme() == QtCore.Qt.ColorScheme.Dark
+        # Fallback: infer from current palette luminance
+        c = app.palette().color(QtGui.QPalette.ColorRole.Window)
+        return (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000 < 128
+
+    apply_theme(app, _is_dark())
+
+    hints = app.styleHints()
+    if hasattr(hints, "colorSchemeChanged"):
+        hints.colorSchemeChanged.connect(lambda _s: apply_theme(app, _is_dark()))
 
     # Try to load the same icon the mac app uses, if present.
     here = os.path.dirname(os.path.abspath(__file__))
