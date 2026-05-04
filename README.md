@@ -128,7 +128,7 @@ If you want to verify the DMG matches what's published:
 
 ```bash
 shasum -a 256 ~/Downloads/PixelArtConverter-1.0.0.dmg
-# expected: e0f9cfb43ec160ca5afd0d4e6194761f92a17b790949ffa29a5b0cf55769d051
+# expected: 34d327da30485d3fe2a3a124a66f5478c506dcd0e9234ef7e593f88fd5648234
 ```
 
 ---

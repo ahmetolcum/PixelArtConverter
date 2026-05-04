@@ -764,28 +764,36 @@ class DropZoneView(NSView):
 
     def drawRect_(self, rect):
         hov = self.__dict__.get("hovered", False)
+        dark = _is_dark_view(self)
         b   = self.bounds()
         p   = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(b, 10, 10)
         if hov:
+            # Same blue tint in both modes (it's the highlight, not the bg)
             NSColor.colorWithCalibratedRed_green_blue_alpha_(0.15, 0.45, 0.9, 0.25).setFill()
             NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.6, 1.0, 1.0).setStroke()
         else:
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.13, 0.13, 0.15, 1.0).setFill()
-            NSColor.colorWithCalibratedWhite_alpha_(0.35, 1.0).setStroke()
+            if dark:
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.13, 0.13, 0.15, 1.0).setFill()
+                NSColor.colorWithCalibratedWhite_alpha_(0.35, 1.0).setStroke()
+            else:
+                NSColor.colorWithCalibratedWhite_alpha_(0.94, 1.0).setFill()
+                NSColor.colorWithCalibratedWhite_alpha_(0.55, 1.0).setStroke()
         p.fill(); p.setLineWidth_(1.5)
         p.setLineDash_count_phase_([7.0, 4.0], 2, 0.0); p.stroke()
         cx, cy = b.size.width/2, b.size.height/2
         self._text("Drop PNG here" if not hov else "Release to open",
                    NSMakePoint(cx, cy), 13, bold=True)
         self._text("or click to open…" if not hov else "",
-                   NSMakePoint(cx, cy-20), 11, alpha=0.5)
+                   NSMakePoint(cx, cy-20), 11, alpha=0.55)
 
     @objc.python_method
     def _text(self, s, pt, sz, bold=False, alpha=1.0):
         if not s: return
         font  = NSFont.boldSystemFontOfSize_(sz) if bold else NSFont.systemFontOfSize_(sz)
-        attrs = {NSForegroundColorAttributeName: NSColor.colorWithCalibratedWhite_alpha_(1.0, alpha),
-                 NSFontAttributeName: font}
+        # Use appearance-aware label color so text reads in both Light and Dark.
+        base  = NSColor.labelColor()
+        color = base.colorWithAlphaComponent_(alpha) if alpha < 1.0 else base
+        attrs = {NSForegroundColorAttributeName: color, NSFontAttributeName: font}
         ns = NSString.stringWithString_(s)
         tw = ns.sizeWithAttributes_(attrs).width
         th = ns.sizeWithAttributes_(attrs).height
@@ -844,7 +852,11 @@ class PaletteView(NSView):
 
     def drawRect_(self, rect):
         colors = self.__dict__.get("colors", [])
-        NSColor.colorWithCalibratedWhite_alpha_(0.12, 1.0).setFill()
+        # Subtle dark slot in dark mode, subtle light slot in light mode
+        bg = (NSColor.colorWithCalibratedWhite_alpha_(0.12, 1.0)
+              if _is_dark_view(self) else
+              NSColor.colorWithCalibratedWhite_alpha_(0.88, 1.0))
+        bg.setFill()
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(self.bounds(), 3, 3).fill()
         if not colors: return
 
@@ -910,10 +922,14 @@ class CheckerImageView(NSImageView):
         bh   = int(b.size.height)
         tile = 8
 
-        # Checkerboard background
+        # Checkerboard background — subtle in both Light and Dark appearances.
+        if _is_dark_view(self):
+            ca, cb = 0.22, 0.16   # dark grays
+        else:
+            ca, cb = 0.93, 0.86   # light grays
         for row in range(0, bh, tile):
             for col in range(0, bw, tile):
-                c = 0.22 if (row//tile + col//tile) % 2 == 0 else 0.16
+                c = ca if (row//tile + col//tile) % 2 == 0 else cb
                 NSColor.colorWithCalibratedWhite_alpha_(c, 1.0).setFill()
                 NSRectFill(NSMakeRect(col, row, tile, tile))
 
@@ -1047,6 +1063,13 @@ class AppDelegate(NSObject):
     def observeValueForKeyPath_ofObject_change_context_(self, key, obj, change, ctx):
         if str(key) == "effectiveAppearance":
             _load_app_icon(NSApplication.sharedApplication())
+            # Force every custom-drawn view to redraw with the new colors.
+            d = self.__dict__
+            for k in ("orig_view", "result_view", "palette",
+                      "drop_zone", "prompt_view"):
+                v = d.get(k)
+                if v is not None and hasattr(v, "setNeedsDisplay_"):
+                    v.setNeedsDisplay_(True)
 
     def applicationShouldTerminateAfterLastWindowClosed_(self, _): return True
 
@@ -1062,8 +1085,8 @@ class AppDelegate(NSObject):
             NSMakeRect(0, 0, W, H), mask, NSBackingStoreBuffered, False)
         win.setTitle_("Pixel Art Converter")
         win.center()
-        dark = NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua")
-        if dark: win.setAppearance_(dark)
+        # Inherit the system appearance (Light or Dark). Custom-drawn views
+        # below detect effectiveAppearance at draw time and pick colors.
         self.__dict__["win"] = win
         cv = win.contentView()
         LP, PW = 14, 268
@@ -1210,7 +1233,7 @@ class AppDelegate(NSObject):
         # ── Status
         y -= 42
         st = self._lbl("Drop a PNG to begin", NSMakeRect(LP, y, PW, 20))
-        st.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.5, 1.0))
+        st.setTextColor_(NSColor.secondaryLabelColor())
         st.setAlignment_(NSTextAlignmentCenter)
         cv.addSubview_(st); self.__dict__["status"] = st
 
@@ -1261,7 +1284,7 @@ class AppDelegate(NSObject):
         cv.addSubview_(pv); self.__dict__["palette"] = pv
 
         il = self._lbl("", NSMakeRect(RX, 12, half, 36))
-        il.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.45, 1.0))
+        il.setTextColor_(NSColor.tertiaryLabelColor())
         cv.addSubview_(il); self.__dict__["info"] = il
 
         # ── Resize behavior ───────────────────────────────────────────────
@@ -1324,7 +1347,8 @@ class AppDelegate(NSObject):
         t = NSTextField.alloc().initWithFrame_(frame)
         t.setStringValue_(text); t.setEditable_(False)
         t.setBordered_(False); t.setDrawsBackground_(False)
-        t.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.85, 1.0))
+        # labelColor auto-adapts: black on Light, near-white on Dark.
+        t.setTextColor_(NSColor.labelColor())
         t.setFont_(NSFont.systemFontOfSize_(12)); return t
 
     @objc.python_method
@@ -1744,7 +1768,7 @@ class AppDelegate(NSObject):
         header = self._lbl(
             "Edit the values below. The prompt updates live. Variables are highlighted in blue.",
             NSMakeRect(20, 600, 680, 22))
-        header.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.7, 1.0))
+        header.setTextColor_(NSColor.secondaryLabelColor())
         cv.addSubview_(header)
 
         # — Frame count
@@ -1789,8 +1813,9 @@ class AppDelegate(NSObject):
         prompt_view.setSelectable_(True)
         prompt_view.setFont_(NSFont.systemFontOfSize_(12))
         prompt_view.setRichText_(True)
-        prompt_view.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(0.10, 1.0))
-        prompt_view.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0))
+        # System textBackgroundColor + textColor auto-adapt to Light/Dark.
+        prompt_view.setBackgroundColor_(NSColor.textBackgroundColor())
+        prompt_view.setTextColor_(NSColor.textColor())
         prompt_scroll.setDocumentView_(prompt_view)
         cv.addSubview_(prompt_scroll)
         d["prompt_view"] = prompt_view
@@ -1834,7 +1859,7 @@ class AppDelegate(NSObject):
         full = NSMakeRange(0, len(text))
         attr.addAttribute_value_range_(
             NSForegroundColorAttributeName,
-            NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0),
+            NSColor.textColor(),  # auto-adapts to appearance
             full)
         attr.addAttribute_value_range_(
             NSFontAttributeName,
@@ -2152,6 +2177,21 @@ def _is_dark_appearance(app):
     """Return True when macOS is currently in Dark mode (system or app-level)."""
     try:
         appearance = app.effectiveAppearance()
+        match = appearance.bestMatchFromAppearancesWithNames_(
+            ["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"])
+        return str(match) == "NSAppearanceNameDarkAqua"
+    except Exception:
+        return False
+
+
+def _is_dark_view(view):
+    """True when the given view is currently rendering in a Dark appearance.
+
+    Use at draw time inside drawRect_ — picks up per-window appearance
+    overrides so a Dark-themed window inside a Light system still draws Dark.
+    """
+    try:
+        appearance = view.effectiveAppearance()
         match = appearance.bestMatchFromAppearancesWithNames_(
             ["NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"])
         return str(match) == "NSAppearanceNameDarkAqua"
