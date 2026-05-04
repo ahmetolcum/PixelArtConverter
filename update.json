@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.1.0/pixel_art_converter.py",
-  "sha256": "a526b9ef2a543754f1eec6c07c3dad665c3ce77ae24aee6468587199bf68baae",
-  "notes": "v1.1.0\n\n- New Image button: clear all settings + loaded images in one click\n- Smooth scroll-wheel and pinch-to-zoom (1× to 32×)\n- Independent zoom on Original vs Pixel Art panels\n- AI Prompt Samples: two prompt modes (animation frames / single image) with 9 pre-written action choreographies and preset views/colors\n- ~16× faster slider tweaks (bilateral filter cached)\n- Companion exports: TexturePacker JSON, animated GIF, individual frames, multi-resolution"
+  "version": "1.1.1",
+  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.1.1/pixel_art_converter.py",
+  "sha256": "c177bfe12bc3cb15bc0bc57bbfcbb627bc499fb26c1c4416b47a5c154a9f8d76",
+  "notes": "v1.1.1\n\n- Smooth zoom-out can now go down to 0.05× on either preview panel — fits very large source images into the panel.\n- Original preview auto-fits on image load — drop a 1024 px illustration and it appears whole in the Original panel without manual scroll-out."
 }

@@ -141,8 +141,8 @@ This is **standard for unsigned indie apps**. The app does nothing it doesn't cl
 If you want to verify the DMG matches what's published:
 
 ```bash
-shasum -a 256 ~/Downloads/PixelArtConverter-1.1.0.dmg
-# expected: f879c9a8c99df6b1e4311214411b5314fadfd14ffe2861ca6c47b044364c229f
+shasum -a 256 ~/Downloads/PixelArtConverter-1.1.1.dmg
+# expected: b97e5ef189bc3f43914aef0743753d67d7314191ee75ee15ebb0fc97f1200709
 ```
 
 ---
