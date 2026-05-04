@@ -4,7 +4,7 @@
 
 # Pixel Art Converter
 
-### Turn AI illustrations into game-ready pixel art — single sprites or animation sheets, locally on your Mac, in seconds.
+### Turn AI illustrations into game-ready pixel art — single sprites or animation sheets, locally on Mac, Windows, or Linux, in seconds.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-green)
@@ -84,21 +84,61 @@ Pixel Art Converter does all of that, **locally**, in seconds. Drop in your AI i
 - **Selective outlining** — outline color is a darkened version of the adjacent material's color (in CIELAB), automatically snapped to the active palette
 - **Multiple background-removal methods** — rembg AI (`isnet-general-use`, `isnet-anime`, `u2net`, `u2net_human_seg`) or color-key keying
 
-> **Background-removal model downloads.** The four AI models are not bundled with the app — each one downloads from GitHub the first time you select it (~175 MB per model, ~700 MB total if you try them all) and caches in `~/.u2net/`. The app shows a progress dialog during the download and you can cancel it; subsequent uses of that model are instant. The default **Edge color (auto)** option needs no download and works fully offline.
+> **Background-removal model downloads.**
+> - **macOS DMG (v2.0+):** the default `isnet-general-use` model (~170 MB) is **bundled** in the app, so first-run BG removal works immediately and offline. The other three models still download lazily into `~/.u2net/` the first time you pick them.
+> - **Windows / Linux:** none of the rembg models are bundled — each one downloads from GitHub the first time you select it (~170 MB per model, ~700 MB total if you try them all) and caches in `~/.u2net/` (or `%USERPROFILE%\.u2net\` on Windows). The app shows a progress dialog and you can cancel it.
+> - **All platforms:** the default **Edge color (auto)** option needs no model download and works fully offline.
 
 ---
 
 ## 🚀 Quick Start
 
-1. **[Download the .dmg](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** (~445 MB), open it, drag **Pixel Art Converter** into your **Applications** folder.
-2. Open the app. See the section below if macOS blocks it on first launch.
+Grab the build for your OS from **[the latest release](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)**, then jump to the matching section below.
+
+### 🍎 macOS — `.dmg` (402 MB, Apple Silicon)
+
+1. Open `PixelArtConverter-2.0.0.dmg`, drag **Pixel Art Converter** into your **Applications** folder.
+2. First launch: see [Opening an unsigned macOS app](#opening-an-unsigned-macos-app--first-launch-only) below.
 3. **Drop a PNG** into the app, pick your output size and palette, click **Save Pixel Art PNG**. Done.
 
-For animation: drop multiple PNGs at once (or tick **Sprite Sheet** and drop one grid image), and the **Save** button produces a sprite sheet PNG with palette-coherent colors across every frame.
+The macOS DMG bundles the default rembg background-removal model, so BG removal works on first launch with no download.
 
-### ⚠️ Opening an unsigned macOS app — first launch only
+### 🪟 Windows — `.zip` (363 MB, x64)
 
-The current release is **not yet signed** with an Apple Developer certificate (planned for v1.1). On first launch, macOS Gatekeeper will refuse to open the app and show one of these messages:
+1. Right-click `PixelArtConverter-windows-x64.zip` → **Extract All…** (or use 7-Zip).
+2. Double-click `PixelArtConverter.exe`.
+3. **Windows SmartScreen** will warn that the publisher is unrecognized — click **More info** → **Run anyway**. (The exe is not yet signed; future releases may include an authenticode signature.)
+4. **Drop a PNG** into the app, pick your output size and palette, click **Save**. Done.
+
+The first time you pick an AI background-removal model (other than the default **Edge color**), it downloads ~170 MB from GitHub and caches in `%USERPROFILE%\.u2net\`. Subsequent runs are instant.
+
+### 🐧 Linux — `.tar.gz` (426 MB, x64)
+
+```bash
+tar -xzf PixelArtConverter-linux-x64.tar.gz
+chmod +x PixelArtConverter
+./PixelArtConverter
+```
+
+If the binary fails with a missing-library error, install the Qt runtime libs your distro typically uses:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+    libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
+    libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb1 libfontconfig1
+```
+
+Same lazy model-download behavior as Windows: BG removal models cache in `~/.u2net/`.
+
+### 🎬 Animation (any platform)
+
+Drop multiple PNGs at once (or tick **Sprite Sheet** and drop one grid image), and **Save** produces a sprite sheet PNG with palette-coherent colors across every frame.
+
+### Opening an unsigned macOS app — first launch only
+
+The macOS build is **not yet signed** with an Apple Developer certificate (signing/notarization is on the roadmap). On first launch, macOS Gatekeeper will refuse to open the app and show one of these messages:
 
 > *"Pixel Art Converter" cannot be opened because the developer cannot be verified.*
 
@@ -141,15 +181,26 @@ sudo xattr -dr com.apple.quarantine "$(mdfind 'kMDItemFSName == "Pixel Art Conve
 
 Any of these removes the quarantine flag set on downloads. Then double-click the app — it opens normally.
 
-This is **standard for unsigned indie apps**. The app does nothing it doesn't claim — all source is in this repo. The signed v1.1 release will eliminate the warning.
+This is **standard for unsigned indie apps**. The app does nothing it doesn't claim — all source is in this repo.
 
 ### Verify the download (optional)
 
-If you want to verify the DMG matches what's published:
+To verify a downloaded build matches what's published:
 
 ```bash
+# macOS
 shasum -a 256 ~/Downloads/PixelArtConverter-2.0.0.dmg
 # expected: 202e7b7f896597804fe685c9e9c7fbf26512c32371e67fc4dda616fb1d5a7193
+
+# Linux
+sha256sum PixelArtConverter-linux-x64.tar.gz
+# expected: 724ab9d4eab972fb6a36b6e04e3abe03bb078964358b37f9b185503a2b7e757c
+```
+
+```powershell
+# Windows (PowerShell)
+Get-FileHash PixelArtConverter-windows-x64.zip -Algorithm SHA256
+# expected: 181D5AE282A68FF1907A8937201A3CBFF24E48E57AA4134C0AA10ED1502D6E03
 ```
 
 ---
@@ -221,42 +272,112 @@ Variables are colored in blue in the live-rendered prompt so you can see at a gl
 
 ## 👨‍💻 For developers
 
-The app is a single Python file (~1700 lines) using PyObjC + AppKit. Run from source:
+### Source layout
+
+The codebase splits into one shared core and two GUIs — pick the one that fits your platform when contributing.
+
+| File | What it is | Used by |
+|---|---|---|
+| `core.py` | Pure image-processing pipeline, palette tables, prompt templates, presets. No GUI imports. | both apps |
+| `pixel_art_converter.py` | macOS-native GUI built on PyObjC + AppKit. | the `.dmg` build |
+| `pixel_art_converter_qt.py` | Cross-platform PySide6 GUI. | the Windows `.zip` and Linux `.tar.gz` builds |
+| `setup.py` | py2app config for the macOS bundle. | `build_dmg.sh` |
+| `pixel_art_converter_qt.spec` | PyInstaller spec for the Qt bundle. | `.github/workflows/release.yml` |
+| `requirements.txt` | Cross-platform Qt runtime deps. | Qt source-runs and PyInstaller |
+
+PRs that change conversion behavior (palettes, smoothing, dithering, BG removal, sprite-sheet handling) land in `core.py` and benefit both apps. PRs that change UI land in the relevant `pixel_art_converter*.py` file.
+
+### Run from source
+
+**macOS — native AppKit GUI:**
 
 ```bash
 git clone https://github.com/ahmetolcum/PixelArtConverter.git
 cd PixelArtConverter
-pip3 install Pillow numpy scikit-image scikit-learn pyobjc "rembg[cpu]"
+pip3 install Pillow numpy scikit-image scikit-learn scipy pyobjc "rembg[cpu]"
 python3 pixel_art_converter.py
 ```
 
-To build a `.dmg`:
+**Windows — PySide6 GUI** (PowerShell or `cmd`, requires Python 3.10+):
 
-```bash
-pip3 install py2app
-python3 setup.py py2app
-hdiutil create -volname "Pixel Art Converter" -srcfolder dist/ -ov -format UDZO PixelArtConverter.dmg
+```powershell
+git clone https://github.com/ahmetolcum/PixelArtConverter.git
+cd PixelArtConverter
+py -m venv venv
+venv\Scripts\python.exe -m pip install -r requirements.txt
+venv\Scripts\python.exe pixel_art_converter_qt.py
 ```
 
-(A `setup.py` will be added to the repo with `py2app` config.)
+No `git`? Download the source ZIP directly and skip the `git clone` step:
+
+```cmd
+curl -L -o pac.zip https://github.com/ahmetolcum/PixelArtConverter/archive/refs/heads/main.zip
+tar -xf pac.zip
+cd PixelArtConverter-main
+```
+
+**Linux — PySide6 GUI:**
+
+```bash
+git clone https://github.com/ahmetolcum/PixelArtConverter.git
+cd PixelArtConverter
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python pixel_art_converter_qt.py
+```
+
+### Build distributable binaries
+
+**macOS DMG** (requires Xcode command-line tools for `actool`/`codesign`/`hdiutil`):
+
+```bash
+pip3 install py2app pyobjc-core pyobjc-framework-Cocoa
+./build_dmg.sh
+# Output: build/PixelArtConverter-<version>.dmg
+```
+
+`build_dmg.sh` compiles the layered Tahoe icon (or uses the pre-compiled assets in `docs/compiled-icons/` if Xcode 26 isn't available), runs py2app, bundles the default `isnet-general-use` rembg model into `Resources/u2net/`, re-signs ad-hoc, and produces a UDZO DMG.
+
+**Windows / Linux PyInstaller bundles** are produced by the GitHub Actions workflow (`.github/workflows/release.yml`) on every `vX.Y.Z` tag push. To build locally:
+
+```bash
+pip install pyinstaller
+pip install -r requirements.txt
+pyinstaller --noconfirm pixel_art_converter_qt.spec
+# Output: dist/PixelArtConverter (or .exe on Windows)
+```
+
+### Cutting a release
+
+1. Bump `core.__version__` (and `setup.py`'s `CFBundleVersion` / `CFBundleShortVersionString` to match).
+2. Push to `main`.
+3. Tag `vX.Y.Z` and push the tag — the release workflow builds Windows + Linux + macOS in parallel and creates the GitHub Release.
+4. After the release goes live, pin `update.json` and the README's verify hashes to the new SHA256s so the macOS in-app updater promotes the new version to existing 1.x users.
 
 ---
 
 ## 🗺️ Roadmap
 
+**Shipped in v2.0**
+- [x] Cross-platform port — PySide6 GUI for Windows + Linux, alongside the macOS native build
+- [x] Default rembg model bundled into the macOS DMG (no first-run download)
+- [x] Single GitHub Actions workflow that releases all three platforms on tag push
+- [x] Shared `core.py` so both GUIs use the exact same conversion pipeline
+
+**Planned**
 - [ ] Notarized & signed `.dmg` (no more Gatekeeper friction)
+- [ ] Authenticode-signed `.exe` (no more SmartScreen warning)
 - [ ] Animated GIF export option
 - [ ] Frame-by-frame preview scrubbing with FPS slider
 - [ ] Sprite sheet grid auto-detection
-- [ ] Apple Silicon-optimized standalone binary
-- [ ] Linux build (PyObjC will need a swap to PySide/Qt)
 - [ ] Batch CLI mode for headless conversion
 
 ---
 
 ## 🛠️ Built with
 
-[Python](https://www.python.org/) · [PyObjC](https://pyobjc.readthedocs.io/) · [Pillow](https://pillow.readthedocs.io/) · [scikit-image](https://scikit-image.org/) · [scikit-learn](https://scikit-learn.org/) · [rembg](https://github.com/danielgatis/rembg) · [Lospec](https://lospec.com/)
+[Python](https://www.python.org/) · [PyObjC](https://pyobjc.readthedocs.io/) (macOS GUI) · [PySide6 / Qt](https://doc.qt.io/qtforpython-6/) (Windows + Linux GUI) · [Pillow](https://pillow.readthedocs.io/) · [scikit-image](https://scikit-image.org/) · [scikit-learn](https://scikit-learn.org/) · [rembg](https://github.com/danielgatis/rembg) · [Lospec](https://lospec.com/) · [py2app](https://py2app.readthedocs.io/) · [PyInstaller](https://pyinstaller.org/)
 
 ---
 
