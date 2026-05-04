@@ -1,6 +1,6 @@
 {
-  "version": "1.1.1",
-  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.1.1/pixel_art_converter.py",
-  "sha256": "c177bfe12bc3cb15bc0bc57bbfcbb627bc499fb26c1c4416b47a5c154a9f8d76",
-  "notes": "v1.1.1\n\n- Smooth zoom-out can now go down to 0.05× on either preview panel — fits very large source images into the panel.\n- Original preview auto-fits on image load — drop a 1024 px illustration and it appears whole in the Original panel without manual scroll-out."
+  "version": "1.2.0",
+  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.2.0/pixel_art_converter.py",
+  "sha256": "9928fe4f4394086d08ee79b77cbaaad1e3e4275aba04f5158f9dcab27b488191",
+  "notes": "v1.2.0\n\n- Native macOS Tahoe layered icon — light/dark/tinted/clear/glass styling renders dynamically. Older macOS (Big Sur–Sequoia) keeps the flat .icns fallback.\n- AI Prompt Samples: new Target dropdown picks ChatGPT (DALL-E 3) or Gemini (Imagen). Gemini variant pushes harder for iconic mascot detail — thick black outlines, gold trim, full prop/accessory rendering.\n- Frames mode gains View and Background dropdowns (parity with Single mode).\n- Cast spell preset is now pose-only (no glow/orb/particles), so any spell visual can be composited on top."
 }
