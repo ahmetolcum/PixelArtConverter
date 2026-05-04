@@ -884,6 +884,47 @@ class MainWindow(QtWidgets.QMainWindow):
 
 # ── Entry point ───────────────────────────────────────────────────────
 
+_arrow_cache: dict = {}
+
+def _arrow_pixmap_path(direction: str, color_hex: str) -> str:
+    """Render a chevron PNG to a temp file once per (direction, color) and
+    return a forward-slashed absolute path suitable for `image: url(...)`.
+    QSS data-URI / SVG support is unreliable across Qt builds; a real PNG
+    file is the most portable option."""
+    import tempfile
+    key = (direction, color_hex)
+    if key in _arrow_cache:
+        return _arrow_cache[key]
+
+    size = 16
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtCore.Qt.GlobalColor.transparent)
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    pen = QtGui.QPen(QtGui.QColor(color_hex))
+    pen.setWidthF(1.8)
+    pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    if direction == "up":
+        path = QtGui.QPainterPath()
+        path.moveTo(4, 10); path.lineTo(8, 6); path.lineTo(12, 10)
+    else:
+        path = QtGui.QPainterPath()
+        path.moveTo(4, 6); path.lineTo(8, 10); path.lineTo(12, 6)
+    p.drawPath(path)
+    p.end()
+
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=f"_{direction}_{color_hex.lstrip('#')}.png",
+        prefix="pac_arrow_", delete=False)
+    tmp.close()
+    pm.save(tmp.name, "PNG")
+    url = tmp.name.replace("\\", "/")
+    _arrow_cache[key] = url
+    return url
+
+
 def _build_qss(dark: bool) -> str:
     if dark:
         accent          = "#60CDFF"
@@ -898,6 +939,8 @@ def _build_qss(dark: bool) -> str:
         slider_groove   = "rgba(255,255,255,0.15)"
         slider_handle   = "#E6E6E6"
         slider_h_border = "rgba(0,0,0,0.40)"
+        arrow_hex       = "#E6E6E6"
+        arrow_dim_hex   = "#6E6E6E"
     else:
         accent          = "#0067C0"
         accent_hover    = "#1975D2"
@@ -911,6 +954,13 @@ def _build_qss(dark: bool) -> str:
         slider_groove   = "rgba(0,0,0,0.15)"
         slider_handle   = "#FFFFFF"
         slider_h_border = "rgba(0,0,0,0.30)"
+        arrow_hex       = "#202020"
+        arrow_dim_hex   = "#A0A0A0"
+
+    up_url       = _arrow_pixmap_path("up",   arrow_hex)
+    down_url     = _arrow_pixmap_path("down", arrow_hex)
+    up_dim_url   = _arrow_pixmap_path("up",   arrow_dim_hex)
+    down_dim_url = _arrow_pixmap_path("down", arrow_dim_hex)
 
     return f"""
 * {{ font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", system-ui, sans-serif; }}
@@ -947,6 +997,81 @@ QComboBox, QSpinBox, QLineEdit, QPlainTextEdit, QTextEdit {{
 }}
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus,
 QPlainTextEdit:focus, QTextEdit:focus {{ border: 1px solid {accent}; }}
+
+QSpinBox {{
+    padding-right: 28px;
+    min-height: 28px;
+}}
+QSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 24px;
+    border: none;
+    border-left: 1px solid {border_strong};
+    border-top-right-radius: 6px;
+    background: transparent;
+}}
+QSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 24px;
+    border: none;
+    border-left: 1px solid {border_strong};
+    border-bottom-right-radius: 6px;
+    background: transparent;
+}}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+    background: {hover_bg};
+}}
+QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {{
+    background: {pressed_bg};
+}}
+QSpinBox::up-arrow {{
+    image: url({up_url});
+    width: 12px; height: 12px;
+}}
+QSpinBox::down-arrow {{
+    image: url({down_url});
+    width: 12px; height: 12px;
+}}
+QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off {{
+    image: url({up_dim_url});
+}}
+QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off {{
+    image: url({down_dim_url});
+}}
+
+QComboBox {{
+    padding-right: 28px;
+    min-height: 28px;
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 26px;
+    border: none;
+    border-left: 1px solid {border_strong};
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    background: transparent;
+}}
+QComboBox::drop-down:hover    {{ background: {hover_bg}; }}
+QComboBox::drop-down:pressed  {{ background: {pressed_bg}; }}
+QComboBox::down-arrow {{
+    image: url({down_url});
+    width: 12px; height: 12px;
+}}
+QComboBox::down-arrow:disabled, QComboBox::down-arrow:off {{
+    image: url({down_dim_url});
+}}
+QComboBox QAbstractItemView {{
+    border: 1px solid {border_strong};
+    background: palette(base);
+    selection-background-color: {accent};
+    selection-color: {accent_text};
+    outline: 0;
+    padding: 4px;
+}}
 
 QCheckBox {{ spacing: 8px; padding: 2px 0; }}
 QCheckBox::indicator {{
