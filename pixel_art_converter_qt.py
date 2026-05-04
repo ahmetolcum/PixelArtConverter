@@ -16,6 +16,7 @@ Run from source:
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import threading
@@ -392,11 +393,11 @@ class PromptSamplesDialog(QtWidgets.QDialog):
 
 class MainWindow(QtWidgets.QMainWindow):
     convert_requested = QtCore.Signal(dict)
+    update_checked    = QtCore.Signal(object, str)  # manifest dict (or None), error str
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Pixel Art Converter v{core.__version__}")
-        self.resize(1280, 820)
         self.setAcceptDrops(True)
 
         self._frames: list[Image.Image] = []     # input frames (1 = single image)
@@ -410,11 +411,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._build_menu()
         self._spawn_worker()
+        self.update_checked.connect(self._show_update_result)
 
         # Debounce timer for slider-driven auto-convert
         self._debounce = QtCore.QTimer(self, singleShot=True)
         self._debounce.setInterval(DEBOUNCE_MS)
         self._debounce.timeout.connect(self.do_convert)
+
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1600, 900)
+        self.resize(min(1119, avail.width()  - 40),
+                    min(920,  avail.height() - 40))
 
     # ---- UI construction ------------------------------------------------
 
@@ -438,6 +445,11 @@ class MainWindow(QtWidgets.QMainWindow):
         a_image_prompt = m_image.addAction("AI Prompt Samples…")
         a_image_prompt.triggered.connect(self.on_show_prompts)
 
+        m_update = bar.addMenu("&Update")
+        a_check = m_update.addAction("Check for Updates…")
+        a_check.triggered.connect(self.on_check_update)
+        self._check_update_action = a_check
+
     def _build_ui(self):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self._controls_panel = self._build_controls_panel()
@@ -445,7 +457,8 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self._build_preview_panel())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([420, 860])
+        panel_w = self._controls_panel.minimumWidth() or 480
+        splitter.setSizes([panel_w, max(640, 1280 - panel_w)])
         self.setCentralWidget(splitter)
 
         self.statusBar().showMessage("Drop an image or use File → Open.")
@@ -453,6 +466,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_controls_panel(self) -> QtWidgets.QWidget:
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         host = QtWidgets.QWidget()
         scroll.setWidget(host)
         v = QtWidgets.QVBoxLayout(host)
@@ -537,11 +551,16 @@ class MainWindow(QtWidgets.QMainWindow):
         bg_row.addWidget(self.bg_combo, 1)
         v.addLayout(bg_row)
 
-        # Adjustments
+        # Adjustments — grid-aligned so every slider starts/ends at the same X
         v.addWidget(self._section_label("Adjustments"))
-        self.brightness_slider, self.brightness_lbl = self._slider_row(v, "Brightness", -100, 100, 0)
-        self.contrast_slider,   self.contrast_lbl   = self._slider_row(v, "Contrast",   -100, 100, 0)
-        self.saturation_slider, self.saturation_lbl = self._slider_row(v, "Saturation", -100, 100, 0)
+        adj_grid = QtWidgets.QGridLayout()
+        adj_grid.setHorizontalSpacing(8)
+        adj_grid.setVerticalSpacing(6)
+        adj_grid.setColumnStretch(1, 1)
+        v.addLayout(adj_grid)
+        self.brightness_slider, self.brightness_lbl = self._slider_grid_row(adj_grid, 0, "Brightness", -100, 100, 0)
+        self.contrast_slider,   self.contrast_lbl   = self._slider_grid_row(adj_grid, 1, "Contrast",   -100, 100, 0)
+        self.saturation_slider, self.saturation_lbl = self._slider_grid_row(adj_grid, 2, "Saturation", -100, 100, 0)
 
         # Convert / Save buttons
         v.addSpacing(8)
@@ -580,6 +599,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 lambda _v, sl=s: None if sl.isSliderDown() else self._schedule_convert()
             )
         self.palette_combo.currentTextChanged.connect(self._schedule_convert)
+
+        # Make sure the panel is wide enough for its widest row, plus a
+        # vertical scrollbar, plus the layout margin. Otherwise text/buttons
+        # get clipped or the user has to resize the splitter manually.
+        host.adjustSize()
+        sb_w = scroll.verticalScrollBar().sizeHint().width()
+        scroll.setMinimumWidth(host.sizeHint().width() + sb_w + 8)
 
         return scroll
 
@@ -640,16 +666,16 @@ class MainWindow(QtWidgets.QMainWindow):
         f = lbl.font(); f.setBold(True); lbl.setFont(f)
         return lbl
 
-    def _slider_row(self, parent_layout, label, lo, hi, default):
-        row = QtWidgets.QHBoxLayout()
+    def _slider_grid_row(self, grid: QtWidgets.QGridLayout, row: int,
+                         label: str, lo: int, hi: int, default: int):
         s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         s.setRange(lo, hi); s.setValue(default); s.setMinimumWidth(180)
         v_lbl = QtWidgets.QLabel(f"{default:+d}")
         v_lbl.setMinimumWidth(36)
-        row.addWidget(QtWidgets.QLabel(label))
-        row.addWidget(s, 1)
-        row.addWidget(v_lbl)
-        parent_layout.addLayout(row)
+        v_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        grid.addWidget(QtWidgets.QLabel(label), row, 0)
+        grid.addWidget(s, row, 1)
+        grid.addWidget(v_lbl, row, 2)
         s.valueChanged.connect(lambda v, lbl=v_lbl: lbl.setText(f"{v:+d}"))
         return s, v_lbl
 
@@ -874,6 +900,55 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_busy(False)
         QtWidgets.QMessageBox.critical(self, "Conversion failed", err)
         self.statusBar().showMessage("Conversion failed")
+
+    # ---- Update check ---------------------------------------------------
+
+    def on_check_update(self):
+        self._check_update_action.setEnabled(False)
+        self.statusBar().showMessage("Checking for updates…")
+        threading.Thread(target=self._fetch_update_manifest, daemon=True).start()
+
+    def _fetch_update_manifest(self):
+        try:
+            req = urllib.request.Request(
+                core._UPDATE_MANIFEST_URL,
+                headers={"User-Agent": f"PixelArtConverter/{core.__version__}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                manifest = json.loads(resp.read().decode("utf-8"))
+            self.update_checked.emit(manifest, "")
+        except Exception as e:
+            self.update_checked.emit(None, str(e))
+
+    @QtCore.Slot(object, str)
+    def _show_update_result(self, manifest, err: str):
+        self._check_update_action.setEnabled(True)
+        self.statusBar().clearMessage()
+        if err or not manifest:
+            QtWidgets.QMessageBox.warning(
+                self, "Update check failed",
+                f"Couldn't reach the update server.\n\n{err or 'Unknown error.'}")
+            return
+
+        latest = str(manifest.get("version", "0"))
+        notes  = str(manifest.get("notes", "")).strip()
+        if core._version_tuple(latest) > core._version_tuple(core.__version__):
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+            box.setWindowTitle("Update available")
+            box.setText(f"A new version is available: v{latest}\n"
+                        f"You're running v{core.__version__}.")
+            if notes:
+                box.setDetailedText(notes)
+            open_btn  = box.addButton("Open Release Page", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is open_btn:
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl(
+                    "https://github.com/ahmetolcum/PixelArtConverter/releases/latest"))
+        else:
+            QtWidgets.QMessageBox.information(
+                self, "Up to date",
+                f"You're running the latest version (v{core.__version__}).")
 
     # ---- Menus ----------------------------------------------------------
 
