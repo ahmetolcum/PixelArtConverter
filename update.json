@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.2.0/pixel_art_converter.py",
-  "sha256": "9928fe4f4394086d08ee79b77cbaaad1e3e4275aba04f5158f9dcab27b488191",
-  "notes": "v1.2.0\n\n- Native macOS Tahoe layered icon — light/dark/tinted/clear/glass styling renders dynamically. Older macOS (Big Sur–Sequoia) keeps the flat .icns fallback.\n- AI Prompt Samples: new Target dropdown picks ChatGPT (DALL-E 3) or Gemini (Imagen). Gemini variant pushes harder for iconic mascot detail — thick black outlines, gold trim, full prop/accessory rendering.\n- Frames mode gains View and Background dropdowns (parity with Single mode).\n- Cast spell preset is now pose-only (no glow/orb/particles), so any spell visual can be composited on top."
+  "version": "2.0.0",
+  "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v2.0.0/pixel_art_converter.py",
+  "sha256": "3f5437eb126f020c8e7607ca720f2dd57a7012b4437f0c095c2867e9f8ceb92d",
+  "notes": "v2.0.0 — cross-platform release\n\n- Windows + Linux native builds are here. A new PySide6 GUI ships in the same release alongside the macOS DMG; both apps share the same core image pipeline so output is identical.\n- macOS DMG now bundles the default background-removal model (isnet-general-use, ~170 MB). First-run BG removal works instantly — no 170 MB download to wait for. The other three rembg models still download on demand into ~/.u2net the way they always have.\n- Internal refactor: pure logic split out into core.py so both the AppKit and Qt apps reuse the exact same palettes, prompt templates, and conversion functions.\n- All three platforms (macOS / Windows / Linux) ship together from a single GitHub Actions workflow on every tag push."
 }
