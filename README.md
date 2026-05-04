@@ -6,12 +6,12 @@
 
 ### Turn AI illustrations into game-ready pixel art — single sprites or animation sheets, locally on your Mac, in seconds.
 
-![Platform](https://img.shields.io/badge/platform-macOS-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 ![Status](https://img.shields.io/badge/status-active-success)
 
-**[⬇ Download for macOS (.dmg)](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** &nbsp;·&nbsp; [Documentation](#documentation) &nbsp;·&nbsp; [Roadmap](#roadmap)
+**[⬇ Download Latest Release](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** — `.dmg` for macOS, `.zip` for Windows, `.tar.gz` for Linux. &nbsp;·&nbsp; [Documentation](#documentation) &nbsp;·&nbsp; [Roadmap](#roadmap)
 
 <br/>
 
@@ -83,6 +83,8 @@ Pixel Art Converter does all of that, **locally**, in seconds. Drop in your AI i
 - **Bayer 8×8 ordered dithering** — produces handmade-looking checker patterns instead of Floyd-Steinberg noise
 - **Selective outlining** — outline color is a darkened version of the adjacent material's color (in CIELAB), automatically snapped to the active palette
 - **Multiple background-removal methods** — rembg AI (`isnet-general-use`, `isnet-anime`, `u2net`, `u2net_human_seg`) or color-key keying
+
+> **Background-removal model downloads.** The four AI models are not bundled with the app — each one downloads from GitHub the first time you select it (~175 MB per model, ~700 MB total if you try them all) and caches in `~/.u2net/`. The app shows a progress dialog during the download and you can cancel it; subsequent uses of that model are instant. The default **Edge color (auto)** option needs no download and works fully offline.
 
 ---
 
