@@ -63,14 +63,15 @@ OPTIONS = {
 
     # Heavy / unused stuff — keeps bundle smaller AND avoids modulegraph
     # following dead-end import chains.
+    # NOTE: do NOT exclude 'unittest' — it's stdlib and scipy/sklearn/skimage
+    # import unittest.mock internally for compatibility shims at runtime.
     'excludes': [
-        'tkinter', 'pytest', 'unittest',
+        'tkinter',
         'matplotlib', 'pandas',          # ~150MB combined, none used
         'IPython', 'jupyter',
         'PyInstaller', 'PySide2', 'PySide6', 'PyQt5', 'PyQt6',  # GUI rivals
         'wx',
         'sphinx', 'pytest', 'mypy',
-        'cython', 'Cython',
     ],
 
     # Platform-native libraries; avoid signing issues with embedded duplicates.
