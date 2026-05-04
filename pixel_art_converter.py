@@ -199,7 +199,7 @@ _last_rembg_status = "ok"   # "ok" | "fallback" — read by the UI thread
 # ── App version + auto-update endpoint ────────────────────────────────────
 # Bump __version__ on every release. The update endpoint hosts a tiny JSON
 # manifest of the latest version + download URL + SHA256.
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 _UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/ahmetolcum/"
     "PixelArtConverter/main/update.json"
@@ -1279,7 +1279,10 @@ PRESETS = [
     ("Custom…",   0,  0),
 ]
 SCALES = [1, 2, 4, 8, 16, 32]
-SCALE_MIN = 1.0
+# Smooth zoom can go below 1× (useful for fitting a large source image into
+# the Original panel). The popup stays at 1× minimum since fractional values
+# clutter the dropdown — scroll/pinch beyond 1× and the popup snaps to 1×.
+SCALE_MIN = 0.05
 SCALE_MAX = 32.0
 
 
@@ -1753,7 +1756,16 @@ class AppDelegate(NSObject):
             d["src_paths"] = paths
             ov = d["orig_view"]
             ov.setImage_(pil_to_nsimage(preview_img))
-            ov.setPixelScale(1)
+            # Auto-fit: scale the source image so the whole thing is visible
+            # in the Original panel on load. User can scroll/pinch from there.
+            ps = ov.frame().size
+            iw, ih = preview_img.size
+            if iw > 0 and ih > 0 and ps.width > 0 and ps.height > 0:
+                fit = min(ps.width / iw, ps.height / ih)
+                fit = min(1.0, max(SCALE_MIN, fit))
+                ov.setPixelScale(fit)
+            else:
+                ov.setPixelScale(1)
             self._set_status(label)
             self._run_convert()
         except Exception as e:
