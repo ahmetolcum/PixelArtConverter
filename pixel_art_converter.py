@@ -30,6 +30,7 @@ from AppKit import (
     NSMenu, NSMenuItem,
     NSCursor,
     NSTextView, NSScrollView, NSAttributedString, NSMutableAttributedString,
+    NSComboBox,
 )
 from Foundation import NSMakeRange
 from Foundation import NSObject, NSData, NSMakeRect, NSMakePoint, NSString
@@ -198,7 +199,7 @@ _last_rembg_status = "ok"   # "ok" | "fallback" — read by the UI thread
 # ── App version + auto-update endpoint ────────────────────────────────────
 # Bump __version__ on every release. The update endpoint hosts a tiny JSON
 # manifest of the latest version + download URL + SHA256.
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 _UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/ahmetolcum/"
     "PixelArtConverter/main/update.json"
@@ -221,7 +222,7 @@ EDGE_COLOR_OPTION = "Edge color (auto)"
 # Variables are wrapped in {NAME} so the template can be rendered with values
 # and we can color those substitutions in the in-app preview.
 
-PROMPT_TEMPLATE = """Generate a single horizontal sprite sheet image showing {N} frames of {SUBJECT} performing {ACTION}. Lay the frames left-to-right in one row, all identical in size, no labels, captions, numbers or borders between them.
+PROMPT_TEMPLATE_FRAMES = """Generate a single horizontal sprite sheet image showing {N} frames of {SUBJECT} performing {ACTION}. Lay the frames left-to-right in one row, all identical in size, no labels, captions, numbers or borders between them.
 
 HARD RULES (critical for animation consistency):
 • Identical {SUBJECT} in every frame — same proportions, same outfit, same color of every part. The ONLY differences between frames are the body parts (or features) actively moving for this action.
@@ -239,11 +240,142 @@ OUTPUT:
 
 DO NOT include: frame numbers, text labels, watermarks, transparency, multiple rows, decorative borders."""
 
-PROMPT_DEFAULTS = {
+PROMPT_DEFAULTS_FRAMES = {
     "N":       "4",
     "SUBJECT": "a small wizard with a long blue robe and a pointed hat",
     "ACTION":  ("a walk cycle: left foot forward (frame 1), both feet together passing (frame 2), "
                 "right foot forward (frame 3), both feet together passing (frame 4)"),
+}
+
+# Single-image mode — generate one illustration ready to be turned into a single
+# pixel-art sprite. Uses the same flat-shaded / solid-background style so the
+# converter's edge-color BG removal and palette quantization work cleanly.
+
+PROMPT_TEMPLATE_SINGLE = """Generate a single illustration of {SUBJECT}, designed to be converted into a pixel-art sprite by an external tool.
+
+COMPOSITION:
+• {SUBJECT} centered in the image with about 10% padding from every edge.
+• {VIEW} view of the subject.
+• Single subject only — no additional scenery, no other objects, no UI elements, no text.
+
+STYLE:
+• Clean cel-shaded illustration, bold outlines, flat colors with ONE shadow tone + ONE highlight tone per material. NOT pixel art. NOT photorealistic. NOT painterly.
+• Limited palette: 6 to 10 distinct colors total. No gradients within shapes.
+
+BACKGROUND:
+• ONE uniform solid color across the entire background (use {BACKGROUND}).
+• No gradient, no scenery, no shadows on the background — completely flat. The converter app keys this color out automatically.
+
+OUTPUT:
+• Square 1024×1024 PNG.
+• {SUBJECT} occupies about 80% of the canvas.
+
+DO NOT include: text labels, watermarks, transparency, decorative borders, frame numbers."""
+
+PROMPT_DEFAULTS_SINGLE = {
+    "SUBJECT":    "a small wizard with a long blue robe and a pointed hat, holding a glowing staff",
+    "VIEW":       "front-facing 3/4",
+    "BACKGROUND": "dark teal #1a3a4a",
+}
+
+# Quick-pick presets for the AI Prompt Samples window.
+# View / background are NSComboBox values — users can also type custom text.
+VIEW_PRESETS = [
+    "front-facing 3/4",
+    "straight-on front",
+    "side profile (right)",
+    "side profile (left)",
+    "back 3/4",
+    "back view",
+    "top-down",
+    "isometric",
+    "close-up portrait",
+    "low-angle hero shot",
+]
+
+BACKGROUND_PRESETS = [
+    "dark teal #1a3a4a",
+    "navy blue #0a2540",
+    "pure black #000000",
+    "pure white #ffffff",
+    "warm grey #5c5c5c",
+    "pastel pink #ffd1dc",
+    "lime green #00ff00",
+    "magenta #ff00ff",
+    "deep purple #2b1a3d",
+    "forest green #1f3d2b",
+]
+
+# Frame-by-frame action choreographies. Selecting one auto-fills both the
+# Frame count (N) and the Action multiline. ("Custom" leaves the fields alone.)
+ACTION_PRESETS = {
+    "Custom — keep current values": (None, None),
+
+    "Walk cycle (4 frames)": (4,
+        "a walk cycle: left foot forward and right arm forward (frame 1); "
+        "both feet together passing through neutral pose (frame 2); "
+        "right foot forward and left arm forward (frame 3); "
+        "both feet together passing through neutral pose (frame 4)"),
+
+    "Run cycle (4 frames)": (4,
+        "a fast running cycle, body leaned forward throughout: "
+        "left foot extended forward, right foot kicking back behind, knees bent (frame 1); "
+        "contact pose with left foot planted on ground, right knee high in front (frame 2); "
+        "right foot extended forward, left foot kicking back behind (frame 3); "
+        "contact pose with right foot planted, left knee high in front (frame 4)"),
+
+    "Idle breathing (4 frames)": (4,
+        "a subtle idle breathing animation, feet planted, arms barely moving: "
+        "chest at rest, shoulders neutral (frame 1); "
+        "chest expanding mid-inhale, shoulders rising slightly (frame 2); "
+        "chest at peak inhale, shoulders highest (frame 3); "
+        "chest deflating mid-exhale, shoulders lowering (frame 4)"),
+
+    "Jump (4 frames)": (4,
+        "a jump animation: "
+        "crouching down with knees deeply bent and arms swung back, anticipation pose (frame 1); "
+        "legs fully extending and arms swinging upward at takeoff, feet leaving the ground (frame 2); "
+        "apex of the jump with arms held high and legs tucked underneath (frame 3); "
+        "landing with knees bent absorbing the impact, arms forward for balance (frame 4)"),
+
+    "Sitting down (4 frames)": (4,
+        "a sit-down sequence: "
+        "standing upright at rest (frame 1); "
+        "knees beginning to bend, torso leaning forward slightly, hands moving back (frame 2); "
+        "deep squat just above seat, hands reaching back for support (frame 3); "
+        "fully seated with back upright and hands resting on knees (frame 4)"),
+
+    "Sword swing attack (4 frames)": (4,
+        "a sword swing attack: "
+        "weapon raised overhead, body coiled with weight on back foot (frame 1); "
+        "weapon coming down through mid-arc, body uncoiling, weight shifting forward (frame 2); "
+        "weapon at full forward extension at the peak of the strike, weight on front foot (frame 3); "
+        "follow-through with weapon held low and body recovering toward neutral (frame 4)"),
+
+    "Cast spell (4 frames)": (4,
+        "a magic-casting animation: "
+        "arms held out forward palms up, no glow yet (frame 1); "
+        "small glowing energy forming between the palms, hair beginning to lift (frame 2); "
+        "bright energy ball at full size between the palms, hair fully lifted by the magic (frame 3); "
+        "arms thrust forward in the direction the spell is being released (frame 4)"),
+
+    "Hurt / damage (2 frames)": (2,
+        "a damage reaction: "
+        "standing pose with body slightly recoiled and pained expression on the face (frame 1); "
+        "body knocked further backward with arm raised defensively (frame 2)"),
+
+    "Death (4 frames)": (4,
+        "a death animation: "
+        "standing pose with hands clutching chest, pained expression (frame 1); "
+        "staggering backward with knees beginning to give way (frame 2); "
+        "kneeling on the ground with head bowed, arms slack (frame 3); "
+        "fallen flat to the side on the ground, completely still (frame 4)"),
+
+    "Wave / greeting (3 frames)": (3,
+        "a friendly waving gesture: "
+        "right arm raised at 45° from the body, hand open (frame 1); "
+        "right arm at full vertical with hand tilted to the right (frame 2); "
+        "right arm still raised but hand now tilted to the left, mid-wave (frame 3)"),
 }
 
 
@@ -538,37 +670,77 @@ def _bayer_dither(img: Image.Image, palette: np.ndarray) -> Image.Image:
     return Image.fromarray(out.reshape(h, w, 3), "RGB")
 
 
-def _run_bg_and_adjust(img, remove_bg, bg_model, brightness, contrast, saturation):
-    """Step 0: BG removal + brightness/contrast/saturation. Returns RGBA."""
-    from PIL import ImageEnhance
+def _run_bg(img, remove_bg, bg_model):
+    """Step 0: only background removal. (Brightness/contrast/saturation moved
+    to a separate, fast step applied after bilateral so slider tweaks don't
+    invalidate the cached bilateral result.)"""
     img = img.convert("RGBA")
-    if remove_bg:
-        if bg_model == EDGE_COLOR_OPTION:
-            img = do_remove_bg(img, model=bg_model)
-        else:
-            a_pre = np.array(img.split()[-1])
-            already_alpha = (a_pre < 200).mean() > 0.05
-            if not already_alpha:
-                img = do_remove_bg(img, model=bg_model)
-            else:
-                r, g, b, a = img.split()
-                img = Image.merge("RGBA", (r, g, b,
-                                           a.point(lambda v: 255 if v > 200 else 0)))
-    if brightness or contrast or saturation:
-        r, g, b, a = img.split()
-        rgb_only = Image.merge("RGB", (r, g, b))
-        if brightness: rgb_only = ImageEnhance.Brightness(rgb_only).enhance(1 + brightness/100.0)
-        if contrast:   rgb_only = ImageEnhance.Contrast(rgb_only).enhance(1 + contrast/100.0)
-        if saturation: rgb_only = ImageEnhance.Color(rgb_only).enhance(1 + saturation/100.0)
-        nr, ng, nb = rgb_only.split()
-        img = Image.merge("RGBA", (nr, ng, nb, a))
-    return img
+    if not remove_bg:
+        return img
+    if bg_model == EDGE_COLOR_OPTION:
+        return do_remove_bg(img, model=bg_model)
+    a_pre = np.array(img.split()[-1])
+    already_alpha = (a_pre < 200).mean() > 0.05
+    if not already_alpha:
+        return do_remove_bg(img, model=bg_model)
+    r, g, b, a = img.split()
+    return Image.merge("RGBA", (r, g, b,
+                                a.point(lambda v: 255 if v > 200 else 0)))
+
+
+def _apply_image_adjustments(rgb_pil, brightness, contrast, saturation):
+    """Apply Brightness/Contrast/Saturation to an RGB PIL image.
+    Cheap (Pillow C ops) — runs every conversion regardless of cache."""
+    if not (brightness or contrast or saturation):
+        return rgb_pil
+    from PIL import ImageEnhance
+    out = rgb_pil
+    if brightness: out = ImageEnhance.Brightness(out).enhance(1 + brightness/100.0)
+    if contrast:   out = ImageEnhance.Contrast(out).enhance(1 + contrast/100.0)
+    if saturation: out = ImageEnhance.Color(out).enhance(1 + saturation/100.0)
+    return out
+
+
+# ── Bilateral cache ──────────────────────────────────────────────────────
+# denoise_bilateral on a 1024² image with sigma~5 takes seconds. The same
+# call with the same input produces the same output, so we cache it. Keyed
+# by (image bytes hash, target w, target h) since target size affects sigma.
+# Bounded FIFO so memory doesn't grow unbounded for animation sets.
+_BILATERAL_CACHE_MAX = 32
+_bilateral_cache: dict = {}
+_bilateral_order: list = []
+
+
+def _bilateral_get(key):
+    return _bilateral_cache.get(key)
+
+
+def _bilateral_put(key, value):
+    if key in _bilateral_cache:
+        _bilateral_order.remove(key)
+    elif len(_bilateral_cache) >= _BILATERAL_CACHE_MAX:
+        old = _bilateral_order.pop(0)
+        _bilateral_cache.pop(old, None)
+    _bilateral_cache[key] = value
+    _bilateral_order.append(key)
 
 
 def _split_and_smooth(img, w, h):
-    """Step 1: split alpha, bilateral-smooth RGB.
-    Returns (smoothed PIL, smoothed_norm np[0..1], alpha_arr np uint8, a_bin PIL)."""
+    """Step 1: pre-resize source to a sane processing size, split alpha,
+    bilateral-smooth RGB (cached). Returns (smoothed PIL, smoothed_norm np,
+    alpha_arr np uint8, a_bin PIL)."""
     from skimage.restoration import denoise_bilateral
+
+    # Pre-resize source — full resolution is overkill for small target sprites.
+    # Cap to 4× target, with a floor of 256 (preserve detail) and ceiling of
+    # 1024 (keep bilateral fast). Target ≥256: source kept up to 1024.
+    max_proc = max(min(max(w, h) * 4, 1024), 256)
+    if max(img.width, img.height) > max_proc:
+        scale = max_proc / max(img.width, img.height)
+        img = img.resize(
+            (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+            Image.Resampling.LANCZOS)
+
     r, g, b, a = img.split()
     a_bin = a.point(lambda v: 255 if v > 127 else 0)
     rgb   = Image.merge("RGB", (r, g, b))
@@ -576,10 +748,17 @@ def _split_and_smooth(img, w, h):
 
     ratio = max(rgb.width / max(w, 1), rgb.height / max(h, 1), 1.0)
     if ratio > 1.2:
-        rgb_norm = np.array(rgb, dtype=np.float32) / 255.0
-        sigma_s  = float(np.clip(ratio * 0.6, 1.0, 6.0))
-        smoothed_norm = denoise_bilateral(
-            rgb_norm, sigma_color=0.06, sigma_spatial=sigma_s, channel_axis=-1)
+        # Cache key: hash of the post-BG-removal RGB bytes + target size.
+        # Same source + same target = cache hit, even if user is dragging
+        # a B/C/S slider — those are applied AFTER bilateral now.
+        cache_key = (hash(rgb.tobytes()), w, h)
+        smoothed_norm = _bilateral_get(cache_key)
+        if smoothed_norm is None:
+            rgb_norm = np.array(rgb, dtype=np.float32) / 255.0
+            sigma_s  = float(np.clip(ratio * 0.6, 1.0, 6.0))
+            smoothed_norm = denoise_bilateral(
+                rgb_norm, sigma_color=0.06, sigma_spatial=sigma_s, channel_axis=-1)
+            _bilateral_put(cache_key, smoothed_norm)
         smoothed = Image.fromarray(np.clip(smoothed_norm * 255, 0, 255).astype(np.uint8))
     else:
         smoothed = rgb
@@ -633,14 +812,30 @@ def _finalize_frame(smoothed, alpha_arr, a_bin, palette, is_fixed, w, h, dither,
     return Image.fromarray(final, "RGBA")
 
 
+def _adjust_pack(smoothed, smoothed_norm, brightness, contrast, saturation):
+    """If any adjustment is non-zero, re-derive the smoothed PIL + norm array.
+    Otherwise pass through. Cheap on its own; only matters that we don't have
+    to re-run bilateral when sliders change."""
+    if not (brightness or contrast or saturation):
+        return smoothed, smoothed_norm
+    smoothed = _apply_image_adjustments(smoothed, brightness, contrast, saturation)
+    smoothed_norm = np.array(smoothed, dtype=np.float32) / 255.0
+    return smoothed, smoothed_norm
+
+
 def make_pixel_art(img, w, h, num_colors, dither, remove_bg, outline,
                    bg_model="isnet-general-use", fixed_palette=None,
                    brightness=0, contrast=0, saturation=0):
     """Single-frame pixel-art pipeline."""
     from skimage.color import rgb2lab
 
-    img = _run_bg_and_adjust(img, remove_bg, bg_model, brightness, contrast, saturation)
+    # 1) BG removal (slow but rare — re-runs only when toggle/model changes)
+    img = _run_bg(img, remove_bg, bg_model)
+    # 2) Pre-resize + alpha split + bilateral (CACHED — repeats are free)
     smoothed, smoothed_norm, alpha_arr, a_bin = _split_and_smooth(img, w, h)
+    # 3) Brightness / contrast / saturation (fast, post-bilateral)
+    smoothed, smoothed_norm = _adjust_pack(
+        smoothed, smoothed_norm, brightness, contrast, saturation)
 
     if fixed_palette is not None and len(fixed_palette) > 0:
         palette = np.asarray(fixed_palette, dtype=np.uint8)
@@ -663,16 +858,23 @@ def make_pixel_art_animation(frames, w, h, num_colors, dither, remove_bg, outlin
     """Multi-frame pipeline — every frame uses the SAME palette so colors don't flicker."""
     from skimage.color import rgb2lab
 
-    pre   = [_run_bg_and_adjust(f, remove_bg, bg_model, brightness, contrast, saturation) for f in frames]
+    # BG removal per frame (skipped/quick if input has alpha)
+    pre = [_run_bg(f, remove_bg, bg_model) for f in frames]
+    # Bilateral per frame, each cached independently (32-entry FIFO covers
+    # typical animation sets); subsequent slider tweaks reuse all of them.
     packs = [_split_and_smooth(f, w, h) for f in pre]
+    # Apply adjustments per frame (cheap)
+    packs = [
+        (*_adjust_pack(s, sn, brightness, contrast, saturation), aa, ab)
+        for s, sn, aa, ab in packs
+    ]
 
     if fixed_palette is not None and len(fixed_palette) > 0:
         palette = np.asarray(fixed_palette, dtype=np.uint8)
         is_fixed = True
     else:
-        # Union of visible LAB pixels across all frames → one shared K-means palette.
         all_visible = []
-        for _smoothed, smoothed_norm, alpha_arr, _a_bin in packs:
+        for _s, smoothed_norm, alpha_arr, _a in packs:
             lab_flat = rgb2lab(smoothed_norm).reshape(-1, 3).astype(np.float32)
             all_visible.append(lab_flat[alpha_arr.flatten() > 127])
         combined = np.concatenate(all_visible) if all_visible else np.zeros((0, 3), dtype=np.float32)
@@ -957,20 +1159,18 @@ class CheckerImageView(NSImageView):
         img.drawInRect_(NSMakeRect(x, y, disp_w, disp_h))
 
         # ── Optional pixel-grid overlay
-        # Only meaningful at ≥2× — at 1× a "grid line" would cover the pixel.
-        scale = self.__dict__.get("px_scale", 4)
-        if self.__dict__.get("show_grid", False) and scale >= 2:
+        # Lines at every actual pixel boundary, computed as round(i*disp/src).
+        # This keeps the grid aligned even at fractional scales (5.7×, 11.3×…).
+        scale = float(self.__dict__.get("px_scale", 4))
+        if self.__dict__.get("show_grid", False) and scale >= 2.0:
             NSColor.colorWithCalibratedWhite_alpha_(0.0, 0.40).setFill()
-            # Vertical lines (1 px wide; NSView clips to bounds automatically)
-            gx = x
-            while gx <= x + disp_w + 0.5:
+            sw, sh = int(isz.width), int(isz.height)
+            for i in range(sw + 1):
+                gx = x + int(round(i * disp_w / sw))
                 NSRectFill(NSMakeRect(gx, y, 1, disp_h))
-                gx += scale
-            # Horizontal lines
-            gy = y
-            while gy <= y + disp_h + 0.5:
+            for i in range(sh + 1):
+                gy = y + int(round(i * disp_h / sh))
                 NSRectFill(NSMakeRect(x, gy, disp_w, 1))
-                gy += scale
 
     @objc.python_method
     def setShowGrid(self, show):
@@ -1022,6 +1222,46 @@ class CheckerImageView(NSImageView):
         self.window().invalidateCursorRectsForView_(self) if self.window() else None
         self.setNeedsDisplay_(True)
 
+    # ── Scroll wheel + pinch-to-zoom ──────────────────────────────────────
+    # Continuous (floating-point) zoom in [SCALE_MIN, SCALE_MAX] = [1×, 32×].
+    # The Preview Scale popup snaps to the nearest discrete SCALES value, but
+    # the actual zoom level can be any float in between.
+
+    def scrollWheel_(self, event):
+        if not self.image(): return
+        delta = float(event.scrollingDeltaY())
+        if delta == 0: return
+        # Multiplicative zoom: each scroll-unit nudges by 0.5%.
+        # Trackpad sends many small deltas (smooth); a real wheel sends a few
+        # big ones (~10 each). Both feel right with this factor.
+        cur = float(self.__dict__.get("px_scale", 4.0))
+        new_scale = cur * (1.0 + delta * 0.005)
+        self._apply_smooth_zoom(new_scale)
+
+    def magnifyWithEvent_(self, event):
+        if not self.image(): return
+        # event.magnification() is the *delta* (~0.01–0.05 per event for pinch)
+        cur = float(self.__dict__.get("px_scale", 4.0))
+        new_scale = cur * (1.0 + float(event.magnification()))
+        self._apply_smooth_zoom(new_scale)
+
+    @objc.python_method
+    def _apply_smooth_zoom(self, new_scale):
+        new_scale = max(SCALE_MIN, min(SCALE_MAX, float(new_scale)))
+        cur = float(self.__dict__.get("px_scale", 4.0))
+        if abs(new_scale - cur) < 0.001: return
+        # Tell the AppDelegate that THIS view zoomed. The delegate updates only
+        # this view (independent zoom per panel) and syncs the popup if the
+        # gesture happened on the Pixel Art preview.
+        delegate = NSApplication.sharedApplication().delegate()
+        if delegate is not None:
+            try:
+                delegate._sync_scale(new_scale, self)
+                return
+            except Exception:
+                pass
+        self.setPixelScale(new_scale)
+
     def setImage_(self, img):
         objc.super(CheckerImageView, self).setImage_(img)
         # New image → reset pan; cursor rect may need updating.
@@ -1038,7 +1278,9 @@ PRESETS = [
     ("96 × 96",   96, 96),  ("128 × 128", 128, 128), ("256 × 256", 256, 256),
     ("Custom…",   0,  0),
 ]
-SCALES = [1, 2, 4, 8]
+SCALES = [1, 2, 4, 8, 16, 32]
+SCALE_MIN = 1.0
+SCALE_MAX = 32.0
 
 
 # ── App delegate ──────────────────────────────────────────────────────────
@@ -1077,7 +1319,7 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _build(self):
-        W, H = 980, 890
+        W, H = 980, 930
         self.__dict__["custom_palettes"] = {}   # display_name -> hex_list
         mask = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                 NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
@@ -1239,10 +1481,11 @@ class AppDelegate(NSObject):
 
         # ── Buttons
         for label, action, key, always_on in [
+            ("New Image",           "onNew:",         "new_btn",    True),
             ("Save Pixel Art PNG",  "onSave:",        "save_btn",   False),
             ("Open in Krita",       "onKrita:",       "krita_btn",  False),
             ("Copy to Clipboard",   "onCopy:",        "copy_btn",   False),
-            ("AI Prompt (frames)…", "onPromptShow:",  "prompt_btn", True),
+            ("AI Prompt Samples",   "onPromptShow:",  "prompt_btn", True),
             (f"Check for Updates  ·  v{__version__}",
                                     "onUpdateCheck:", "update_btn", True),
         ]:
@@ -1448,7 +1691,7 @@ class AppDelegate(NSObject):
                   "outline_chk", "bg_model_pop", "scale_pop",
                   "palette_pop", "bright_sl", "contr_sl", "sat_sl",
                   "grid_chk", "sheet_chk",
-                  "lock_btn", "save_btn", "krita_btn", "copy_btn"):
+                  "new_btn", "lock_btn", "save_btn", "krita_btn", "copy_btn"):
             ctrl = d.get(k)
             if ctrl is not None:
                 ctrl.setEnabled_(on)
@@ -1755,55 +1998,120 @@ class AppDelegate(NSObject):
             d["prompt_win"].makeKeyAndOrderFront_(None)
             return
 
-        rect = NSMakeRect(0, 0, 720, 640)
+        rect = NSMakeRect(0, 0, 720, 680)
         mask = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                 NSWindowStyleMaskResizable)
         win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, mask, NSBackingStoreBuffered, False)
-        win.setTitle_("AI Prompt — generate animation frames")
+        win.setTitle_("AI Prompt — generate input for the converter")
         win.center()
         cv = win.contentView()
 
-        # Header
+        # Header + mode picker
         header = self._lbl(
             "Edit the values below. The prompt updates live. Variables are highlighted in blue.",
-            NSMakeRect(20, 600, 680, 22))
+            NSMakeRect(20, 640, 680, 22))
         header.setTextColor_(NSColor.secondaryLabelColor())
         cv.addSubview_(header)
 
-        # — Frame count
-        cv.addSubview_(self._lbl("Frame count (N):", NSMakeRect(20, 565, 130, 22)))
+        cv.addSubview_(self._lbl("Type:", NSMakeRect(20, 605, 50, 22)))
+        mode_pop = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(75, 603, 250, 26), False)
+        mode_pop.addItemWithTitle_("Animation frames sprite sheet")
+        mode_pop.addItemWithTitle_("Single image / object")
+        mode_pop.selectItemAtIndex_(0)
+        mode_pop.setTarget_(self); mode_pop.setAction_("onPromptModeChange:")
+        cv.addSubview_(mode_pop); d["prompt_mode_pop"] = mode_pop
+
+        # Action preset popup (Frames-mode only) — picks a pre-written
+        # frame-by-frame action choreography.
+        ap_lbl = self._lbl("Action preset:", NSMakeRect(335, 605, 95, 22))
+        cv.addSubview_(ap_lbl); d["prompt_action_preset_lbl"] = ap_lbl
+        ap = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(430, 603, 270, 26), False)
+        for name in ACTION_PRESETS.keys():
+            ap.addItemWithTitle_(name)
+        ap.selectItemAtIndex_(0)   # "Custom" first
+        ap.setTarget_(self); ap.setAction_("onPromptActionPreset:")
+        cv.addSubview_(ap); d["prompt_action_preset_pop"] = ap
+
+        # ── FRAMES MODE FIELDS ────────────────────────────────────────────
+        # Frame count
+        f_lbl1 = self._lbl("Frame count (N):", NSMakeRect(20, 565, 130, 22))
+        cv.addSubview_(f_lbl1)
         nf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 562, 60, 26))
-        nf.setStringValue_(PROMPT_DEFAULTS["N"])
+        nf.setStringValue_(PROMPT_DEFAULTS_FRAMES["N"])
         nf.setBezeled_(True); nf.setEditable_(True); nf.setSelectable_(True)
         nf.setTarget_(self); nf.setAction_("onPromptVarChanged:")
         nf.setDelegate_(self)
         cv.addSubview_(nf); d["prompt_n"] = nf
 
-        # — Subject
-        cv.addSubview_(self._lbl("Subject:", NSMakeRect(20, 525, 130, 22)))
+        # Subject (frames)
+        f_lbl2 = self._lbl("Subject:", NSMakeRect(20, 525, 130, 22))
+        cv.addSubview_(f_lbl2)
         sf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 522, 545, 26))
-        sf.setStringValue_(PROMPT_DEFAULTS["SUBJECT"])
+        sf.setStringValue_(PROMPT_DEFAULTS_FRAMES["SUBJECT"])
         sf.setBezeled_(True); sf.setEditable_(True); sf.setSelectable_(True)
         sf.setTarget_(self); sf.setAction_("onPromptVarChanged:")
         sf.setDelegate_(self)
         cv.addSubview_(sf); d["prompt_subject"] = sf
 
-        # — Action (multi-line)
-        cv.addSubview_(self._lbl("Action:", NSMakeRect(20, 480, 130, 22)))
+        # Action (multi-line)
+        f_lbl3 = self._lbl("Action:", NSMakeRect(20, 480, 130, 22))
+        cv.addSubview_(f_lbl3)
         action_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(155, 440, 545, 70))
         action_scroll.setHasVerticalScroller_(True)
-        action_scroll.setBorderType_(2)   # NSBezelBorder
+        action_scroll.setBorderType_(2)
         action_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 545, 70))
-        action_view.setString_(PROMPT_DEFAULTS["ACTION"])
+        action_view.setString_(PROMPT_DEFAULTS_FRAMES["ACTION"])
         action_view.setFont_(NSFont.systemFontOfSize_(12))
         action_view.setRichText_(False)
         action_view.setDelegate_(self)
         action_scroll.setDocumentView_(action_view)
         cv.addSubview_(action_scroll)
         d["prompt_action"] = action_view
+        d["prompt_action_scroll"] = action_scroll
+        d["prompt_frames_views"] = [f_lbl1, nf, f_lbl2, sf, f_lbl3, action_scroll]
 
-        # — Rendered prompt (read-only, with colored variables)
+        # ── SINGLE-IMAGE MODE FIELDS ──────────────────────────────────────
+        # Subject (single)
+        s_lbl1 = self._lbl("Subject:", NSMakeRect(20, 565, 130, 22))
+        cv.addSubview_(s_lbl1)
+        s_subj = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 562, 545, 26))
+        s_subj.setStringValue_(PROMPT_DEFAULTS_SINGLE["SUBJECT"])
+        s_subj.setBezeled_(True); s_subj.setEditable_(True); s_subj.setSelectable_(True)
+        s_subj.setTarget_(self); s_subj.setAction_("onPromptVarChanged:")
+        s_subj.setDelegate_(self)
+        cv.addSubview_(s_subj); d["prompt_single_subject"] = s_subj
+
+        # View / angle — combo box: pick from preset list OR type custom
+        s_lbl2 = self._lbl("View:", NSMakeRect(20, 525, 130, 22))
+        cv.addSubview_(s_lbl2)
+        s_view = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 522, 545, 26))
+        for v in VIEW_PRESETS: s_view.addItemWithObjectValue_(v)
+        s_view.setStringValue_(PROMPT_DEFAULTS_SINGLE["VIEW"])
+        s_view.setNumberOfVisibleItems_(8)
+        s_view.setEditable_(True); s_view.setSelectable_(True)
+        s_view.setDelegate_(self)
+        cv.addSubview_(s_view); d["prompt_single_view"] = s_view
+
+        # Background color — combo box of common solid colors with hex codes
+        s_lbl3 = self._lbl("Background:", NSMakeRect(20, 485, 130, 22))
+        cv.addSubview_(s_lbl3)
+        s_bg = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 482, 545, 26))
+        for c in BACKGROUND_PRESETS: s_bg.addItemWithObjectValue_(c)
+        s_bg.setStringValue_(PROMPT_DEFAULTS_SINGLE["BACKGROUND"])
+        s_bg.setNumberOfVisibleItems_(8)
+        s_bg.setEditable_(True); s_bg.setSelectable_(True)
+        s_bg.setDelegate_(self)
+        cv.addSubview_(s_bg); d["prompt_single_bg"] = s_bg
+
+        d["prompt_single_views"] = [s_lbl1, s_subj, s_lbl2, s_view, s_lbl3, s_bg]
+
+        # Hide single-mode fields initially (frames is default)
+        for v in d["prompt_single_views"]: v.setHidden_(True)
+
+        # ── Rendered prompt (read-only, colored variables) ────────────────
         cv.addSubview_(self._lbl("Rendered prompt:", NSMakeRect(20, 410, 200, 22)))
         prompt_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 70, 680, 335))
         prompt_scroll.setHasVerticalScroller_(True)
@@ -1813,7 +2121,6 @@ class AppDelegate(NSObject):
         prompt_view.setSelectable_(True)
         prompt_view.setFont_(NSFont.systemFontOfSize_(12))
         prompt_view.setRichText_(True)
-        # System textBackgroundColor + textColor auto-adapt to Light/Dark.
         prompt_view.setBackgroundColor_(NSColor.textBackgroundColor())
         prompt_view.setTextColor_(NSColor.textColor())
         prompt_scroll.setDocumentView_(prompt_view)
@@ -1834,26 +2141,71 @@ class AppDelegate(NSObject):
         close_btn.setTarget_(self); close_btn.setAction_("onPromptClose:")
         cv.addSubview_(close_btn)
 
-        d["prompt_win"] = win
+        d["prompt_win"]  = win
+        d["prompt_mode"] = "frames"   # default
         self._render_prompt_view()
         win.makeKeyAndOrderFront_(None)
+
+    @objc.IBAction
+    def onPromptModeChange_(self, sender):
+        """Toggle between Frames mode and Single-image mode."""
+        d = self.__dict__
+        idx = sender.indexOfSelectedItem()
+        d["prompt_mode"] = "frames" if idx == 0 else "single"
+        is_frames = (idx == 0)
+        for v in d.get("prompt_frames_views", []): v.setHidden_(not is_frames)
+        for v in d.get("prompt_single_views",  []): v.setHidden_(is_frames)
+        # Action preset popup is meaningful only in Frames mode
+        ap_lbl = d.get("prompt_action_preset_lbl")
+        ap_pop = d.get("prompt_action_preset_pop")
+        if ap_lbl: ap_lbl.setHidden_(not is_frames)
+        if ap_pop: ap_pop.setHidden_(not is_frames)
+        self._render_prompt_view()
+
+    @objc.IBAction
+    def onPromptActionPreset_(self, sender):
+        """Apply a pre-written action choreography to N + Action fields."""
+        title = str(sender.titleOfSelectedItem())
+        n, action = ACTION_PRESETS.get(title, (None, None))
+        d = self.__dict__
+        if n is not None and d.get("prompt_n"):
+            d["prompt_n"].setStringValue_(str(n))
+        if action is not None and d.get("prompt_action"):
+            d["prompt_action"].setString_(action)
+        self._render_prompt_view()
 
     @objc.python_method
     def _current_prompt_values(self):
         d = self.__dict__
+        if d.get("prompt_mode", "frames") == "single":
+            return {
+                "SUBJECT":    str(d["prompt_single_subject"].stringValue()).strip()
+                              or PROMPT_DEFAULTS_SINGLE["SUBJECT"],
+                "VIEW":       str(d["prompt_single_view"].stringValue()).strip()
+                              or PROMPT_DEFAULTS_SINGLE["VIEW"],
+                "BACKGROUND": str(d["prompt_single_bg"].stringValue()).strip()
+                              or PROMPT_DEFAULTS_SINGLE["BACKGROUND"],
+            }
         action_view = d.get("prompt_action")
         return {
-            "N":       str(d["prompt_n"].stringValue()).strip()       or PROMPT_DEFAULTS["N"],
-            "SUBJECT": str(d["prompt_subject"].stringValue()).strip() or PROMPT_DEFAULTS["SUBJECT"],
-            "ACTION":  str(action_view.string()).strip()              or PROMPT_DEFAULTS["ACTION"],
+            "N":       str(d["prompt_n"].stringValue()).strip()       or PROMPT_DEFAULTS_FRAMES["N"],
+            "SUBJECT": str(d["prompt_subject"].stringValue()).strip() or PROMPT_DEFAULTS_FRAMES["SUBJECT"],
+            "ACTION":  str(action_view.string()).strip()              or PROMPT_DEFAULTS_FRAMES["ACTION"],
         }
+
+    @objc.python_method
+    def _current_prompt_template(self):
+        return (PROMPT_TEMPLATE_SINGLE
+                if self.__dict__.get("prompt_mode", "frames") == "single"
+                else PROMPT_TEMPLATE_FRAMES)
 
     @objc.python_method
     def _render_prompt_view(self):
         d = self.__dict__
         view = d.get("prompt_view")
         if view is None: return
-        text, ranges = render_prompt(PROMPT_TEMPLATE, self._current_prompt_values())
+        text, ranges = render_prompt(self._current_prompt_template(),
+                                     self._current_prompt_values())
         attr = NSMutableAttributedString.alloc().initWithString_(text)
         # Base color: light grey (the template body)
         full = NSMakeRange(0, len(text))
@@ -1887,18 +2239,24 @@ class AppDelegate(NSObject):
 
     @objc.IBAction
     def onPromptCopy_(self, _):
-        text, _ = render_prompt(PROMPT_TEMPLATE, self._current_prompt_values())
+        text, _ = render_prompt(self._current_prompt_template(),
+                                self._current_prompt_values())
         pb = NSPasteboard.generalPasteboard()
         pb.clearContents()
         pb.setString_forType_(text, "public.utf8-plain-text")
-        self._set_status("AI prompt copied ✓")
+        mode = "frames" if self.__dict__.get("prompt_mode", "frames") == "frames" else "single"
+        self._set_status(f"AI prompt ({mode}) copied ✓")
 
     @objc.IBAction
     def onPromptClose_(self, _):
         d = self.__dict__
         win = d.pop("prompt_win", None)
         if win is not None: win.orderOut_(None)
-        for k in ("prompt_view", "prompt_n", "prompt_subject", "prompt_action"):
+        for k in ("prompt_view", "prompt_n", "prompt_subject", "prompt_action",
+                  "prompt_action_scroll", "prompt_mode_pop", "prompt_mode",
+                  "prompt_single_subject", "prompt_single_view", "prompt_single_bg",
+                  "prompt_frames_views", "prompt_single_views",
+                  "prompt_action_preset_pop", "prompt_action_preset_lbl"):
             d.pop(k, None)
 
     # ── Auto-update ───────────────────────────────────────────────────────
@@ -2072,10 +2430,33 @@ class AppDelegate(NSObject):
 
     @objc.IBAction
     def onScale_(self, _):
+        # The Preview Scale popup controls the Pixel Art panel only.
+        # The Original panel keeps its own independent zoom (changeable via
+        # scroll/pinch on the Original panel itself).
         d = self.__dict__
-        if d.get("result_img") is None: return
         scale = SCALES[d["scale_pop"].indexOfSelectedItem()]
-        d["result_view"].setPixelScale(scale)   # instant, no re-processing
+        if d.get("result_view") is not None:
+            d["result_view"].setPixelScale(scale)
+
+    @objc.python_method
+    def _sync_scale(self, scale, sender=None):
+        """Called by a CheckerImageView when scroll/pinch changes its zoom.
+        Each panel zooms independently — only the sender view is updated.
+        The Preview Scale popup tracks the Pixel Art panel only."""
+        scale = max(SCALE_MIN, min(SCALE_MAX, float(scale)))
+        d = self.__dict__
+        if sender is None:
+            # Popup-driven (no gesture sender) — Pixel Art panel only.
+            target = d.get("result_view")
+            if target is not None:
+                target.setPixelScale(scale)
+            return
+        # Gesture path: update only the panel the user scrolled/pinched.
+        sender.setPixelScale(scale)
+        # Pop-up reflects the Pixel Art panel only; Original is independent.
+        if sender is d.get("result_view") and d.get("scale_pop") is not None:
+            idx = min(range(len(SCALES)), key=lambda i: abs(SCALES[i] - scale))
+            d["scale_pop"].selectItemAtIndex_(idx)
 
     @objc.IBAction
     def onGrid_(self, sender):
@@ -2086,26 +2467,306 @@ class AppDelegate(NSObject):
             if v is not None: v.setShowGrid(show)
 
     @objc.IBAction
+    def onNew_(self, _):
+        """Clear all loaded data and reset every setting back to defaults."""
+        d = self.__dict__
+        # If a conversion is running, ignore — _lock_ui already disables the button.
+        if d.get("busy"): return
+
+        # Clear loaded source + result state
+        d["frames"]        = []
+        d["src_paths"]     = []
+        d["result_img"]    = None
+        d["result_frames"] = []
+        d["rembg_status"]  = "ok"
+
+        # Clear the preview views
+        d["orig_view"  ].setImage_(None); d["orig_view"  ].setNeedsDisplay_(True)
+        d["result_view"].setImage_(None); d["result_view"].setNeedsDisplay_(True)
+        d["palette"].setColors([])
+
+        # Reset every parameter to its default
+        d["preset_pop"].selectItemAtIndex_(4)               # 64×64 preset
+        d["w_field"   ].setStringValue_("64")
+        d["h_field"   ].setStringValue_("64")
+        d["lock_btn"  ].setState_(NSOnState); d["aspect_locked"] = True
+
+        d["colors_sl"].setIntValue_(24); d["colors_lbl"].setStringValue_("Colors: 24")
+        d["palette_pop"].selectItemAtIndex_(0)              # Auto (K-means)
+
+        d["bright_sl"].setIntValue_(0); d["bright_lbl"].setStringValue_("Bright: 0")
+        d["contr_sl" ].setIntValue_(0); d["contr_lbl" ].setStringValue_("Contr: 0")
+        d["sat_sl"   ].setIntValue_(0); d["sat_lbl"   ].setStringValue_("Sat: 0")
+
+        d["dither_chk"].setState_(0)
+        d["rembg_chk" ].setState_(0)
+        d["bg_model_pop"].selectItemAtIndex_(0)             # isnet-general-use
+        d["outline_chk"].setState_(NSOnState)               # outline ON by default
+
+        d["scale_pop"].selectItemAtIndex_(2)                # 4×
+        d["grid_chk" ].setState_(0)
+
+        d["sheet_chk" ].setState_(0)
+        d["sheet_cols"].setStringValue_("4")
+        d["sheet_rows"].setStringValue_("1")
+
+        # Drop zone is unlocked, export buttons disabled until a new image is loaded
+        if d.get("drop_zone"): d["drop_zone"].__dict__["locked"] = False
+        self._enable_export(False)
+
+        d["info"].setStringValue_("")
+        self._set_status("Drop a PNG to begin")
+
+    @objc.python_method
+    def _build_save_accessory(self):
+        """Build the NSSavePanel accessory view with extra export options."""
+        d = self.__dict__
+        n_frames = len(d.get("result_frames") or [])
+        is_anim = n_frames > 1
+
+        # Accessory height depends on animation vs single — anim adds GIF + frames rows.
+        height = 168 if is_anim else 112
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 360, height))
+
+        def chk(title, frame, default_on=False):
+            b = NSButton.alloc().initWithFrame_(frame)
+            b.setButtonType_(NSSwitchButton); b.setTitle_(title)
+            b.setState_(NSOnState if default_on else 0)
+            return b
+
+        y = height - 4
+        # Header
+        y -= 22
+        view.addSubview_(self._lbl("Companion files (saved alongside the PNG):",
+                                   NSMakeRect(10, y, 340, 18)))
+
+        # Multi-resolution
+        y -= 26
+        mr = chk("Also save at 32× and 128× variants",
+                 NSMakeRect(15, y, 340, 22))
+        view.addSubview_(mr)
+        d["_save_multires_chk"] = mr
+
+        # TexturePacker JSON
+        y -= 26
+        tp = chk("TexturePacker JSON (atlas metadata for game engines)",
+                 NSMakeRect(15, y, 340, 22),
+                 default_on=is_anim)   # ON by default for animations
+        view.addSubview_(tp)
+        d["_save_json_chk"] = tp
+
+        if is_anim:
+            # Animated GIF (preview format)
+            y -= 26
+            gif = chk("Animated GIF preview (8 fps)",
+                      NSMakeRect(15, y, 340, 22))
+            view.addSubview_(gif)
+            d["_save_gif_chk"] = gif
+
+            # Individual frames
+            y -= 26
+            ind = chk(f"Individual frame PNGs ({n_frames} files)",
+                      NSMakeRect(15, y, 340, 22))
+            view.addSubview_(ind)
+            d["_save_indiv_chk"] = ind
+        else:
+            d["_save_gif_chk"]   = None
+            d["_save_indiv_chk"] = None
+
+        return view
+
+    @objc.IBAction
     def onSave_(self, _):
         d = self.__dict__
         if d["result_img"] is None: return
+
         panel = NSSavePanel.savePanel()
         panel.setAllowedFileTypes_(["png"])
+        panel.setAccessoryView_(self._build_save_accessory())
+
         paths = d.get("src_paths") or []
+        n_frames = len(d.get("result_frames") or [])
         if paths:
             base = os.path.splitext(os.path.basename(paths[0]))[0]
             w, h = self._params()[:2]
-            n = len(d.get("result_frames") or [])
-            if n > 1:
-                # Filename includes frame count + frame size so a game engine
-                # can slice the sheet without guessing.
-                panel.setNameFieldStringValue_(f"{base}_{n}frames_{w}x{h}.png")
+            if n_frames > 1:
+                panel.setNameFieldStringValue_(f"{base}_{n_frames}frames_{w}x{h}.png")
             else:
                 panel.setNameFieldStringValue_(f"{base}_{w}x{h}.png")
-        if panel.runModal() == NSModalResponseOK:
-            path = panel.URL().path()
-            d["result_img"].save(path)
-            self._set_status(f"Saved → {os.path.basename(path)}")
+
+        if panel.runModal() != NSModalResponseOK: return
+        path = panel.URL().path()
+
+        # Write the primary PNG (sprite sheet for animations, single image otherwise)
+        d["result_img"].save(path)
+        written = [os.path.basename(path)]
+
+        # Read the accessory checkboxes
+        want_multires = (d.get("_save_multires_chk") is not None and
+                         d["_save_multires_chk"].state() == NSOnState)
+        want_json     = (d.get("_save_json_chk")     is not None and
+                         d["_save_json_chk"].state() == NSOnState)
+        want_gif      = (d.get("_save_gif_chk")      is not None and
+                         d["_save_gif_chk"].state() == NSOnState)
+        want_indiv    = (d.get("_save_indiv_chk")    is not None and
+                         d["_save_indiv_chk"].state() == NSOnState)
+
+        try:
+            if want_json:
+                jp = self._write_texturepacker_json(path)
+                if jp: written.append(os.path.basename(jp))
+
+            if want_gif and n_frames > 1:
+                gp = self._write_animated_gif(path)
+                if gp: written.append(os.path.basename(gp))
+
+            if want_indiv and n_frames > 1:
+                count = self._write_individual_frames(path)
+                if count: written.append(f"{count} frame PNGs")
+
+            if want_multires:
+                paths_mr = self._write_multires_variants(path)
+                for p in paths_mr: written.append(os.path.basename(p))
+        except Exception as e:
+            self._set_status(f"Saved primary, companion error: {e}")
+            return
+
+        self._set_status("Saved → " + ", ".join(written))
+
+    # ── Companion file writers ────────────────────────────────────────────
+
+    @objc.python_method
+    def _write_texturepacker_json(self, png_path):
+        """Write a TexturePacker-compatible JSON sidecar so engines can auto-slice
+        the sprite sheet on import. Format reference:
+        https://www.codeandweb.com/texturepacker/documentation/texture-settings#data-formats"""
+        import json as _json
+        d = self.__dict__
+        result = d["result_img"]
+        frames = d.get("result_frames") or []
+        n = len(frames)
+        sheet_w, sheet_h = result.size
+        if n > 1:
+            fw, fh = frames[0].size
+        else:
+            fw, fh = sheet_w, sheet_h
+
+        base_no_ext = os.path.splitext(png_path)[0]
+        base_name   = os.path.splitext(os.path.basename(png_path))[0]
+        png_name    = os.path.basename(png_path)
+
+        # JSON-Hash format (most widely supported by engines)
+        frame_dict = {}
+        if n > 1:
+            for i in range(n):
+                key = f"{base_name}_{i:02d}"
+                frame_dict[key] = {
+                    "frame":            {"x": i*fw, "y": 0, "w": fw, "h": fh},
+                    "rotated":          False,
+                    "trimmed":          False,
+                    "spriteSourceSize": {"x": 0, "y": 0, "w": fw, "h": fh},
+                    "sourceSize":       {"w": fw, "h": fh},
+                    "pivot":            {"x": 0.5, "y": 1.0},  # bottom-center for chars
+                }
+        else:
+            frame_dict[base_name] = {
+                "frame":            {"x": 0, "y": 0, "w": fw, "h": fh},
+                "rotated":          False,
+                "trimmed":          False,
+                "spriteSourceSize": {"x": 0, "y": 0, "w": fw, "h": fh},
+                "sourceSize":       {"w": fw, "h": fh},
+                "pivot":            {"x": 0.5, "y": 1.0},
+            }
+
+        manifest = {
+            "frames": frame_dict,
+            "meta": {
+                "app":       "Pixel Art Converter",
+                "version":   __version__,
+                "image":     png_name,
+                "format":    "RGBA8888",
+                "size":      {"w": sheet_w, "h": sheet_h},
+                "scale":     "1",
+                "frameTags": ([{"name": "default", "from": 0, "to": n-1, "direction": "forward"}]
+                              if n > 1 else []),
+            },
+        }
+        json_path = f"{base_no_ext}.json"
+        with open(json_path, "w") as f:
+            _json.dump(manifest, f, indent=2)
+        return json_path
+
+    @objc.python_method
+    def _write_animated_gif(self, png_path):
+        """Write an animated GIF preview at 8 fps (125 ms per frame)."""
+        d = self.__dict__
+        frames = d.get("result_frames") or []
+        if len(frames) < 2: return None
+        gif_path = os.path.splitext(png_path)[0] + ".gif"
+        # GIF doesn't support alpha well; we put fully-transparent pixels on a
+        # transparent palette index so most viewers show transparency.
+        first = frames[0].convert("RGBA")
+        rest  = [f.convert("RGBA") for f in frames[1:]]
+        first.save(gif_path,
+                   save_all=True, append_images=rest,
+                   duration=125, loop=0, disposal=2, transparency=0)
+        return gif_path
+
+    @objc.python_method
+    def _write_individual_frames(self, png_path):
+        """Write each animation frame as its own PNG (frame_01.png, etc.)."""
+        d = self.__dict__
+        frames = d.get("result_frames") or []
+        if len(frames) < 2: return 0
+        base_no_ext = os.path.splitext(png_path)[0]
+        # Strip any "_Nframes_WxH" suffix that came from the auto-suggested name
+        import re
+        clean = re.sub(r"_\d+frames_\d+x\d+$", "", base_no_ext)
+        for i, f in enumerate(frames, start=1):
+            f.save(f"{clean}_frame_{i:02d}.png")
+        return len(frames)
+
+    @objc.python_method
+    def _write_multires_variants(self, png_path):
+        """Re-render and save the same sprite at 32× and 128× resolutions.
+        Uses the existing pipeline so palette/dithering/outline are consistent."""
+        d = self.__dict__
+        if not d.get("frames"): return []
+        try:
+            (w, h, colors, dither, rembg, outline, bg_model,
+             fixed_palette, _pname, bright, contr, sat) = self._params()
+        except Exception:
+            return []
+        base_no_ext = os.path.splitext(png_path)[0]
+        # Strip any "_Nframes_WxH" or "_WxH" suffix from base
+        import re
+        clean = re.sub(r"(_\d+frames)?_\d+x\d+$", "", base_no_ext)
+        out_paths = []
+        ratio = h / max(w, 1)   # preserve aspect
+        for sz in (32, 128):
+            if sz == w: continue   # skip the size we just saved
+            tw, th = sz, max(1, int(round(sz * ratio)))
+            try:
+                src_frames = [f.copy() for f in d["frames"]]
+                if len(src_frames) > 1:
+                    res = make_pixel_art_animation(
+                        src_frames, tw, th, colors, dither, rembg, outline,
+                        bg_model, fixed_palette=fixed_palette,
+                        brightness=bright, contrast=contr, saturation=sat)
+                    img = compose_sprite_sheet(res)
+                    n = len(res)
+                    p = f"{clean}_{n}frames_{tw}x{th}.png"
+                else:
+                    img = make_pixel_art(
+                        src_frames[0], tw, th, colors, dither, rembg, outline,
+                        bg_model, fixed_palette=fixed_palette,
+                        brightness=bright, contrast=contr, saturation=sat)
+                    p = f"{clean}_{tw}x{th}.png"
+                img.save(p)
+                out_paths.append(p)
+            except Exception:
+                continue
+        return out_paths
 
     @objc.IBAction
     def onSheet_(self, _):
