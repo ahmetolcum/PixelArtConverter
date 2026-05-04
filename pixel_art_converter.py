@@ -33,7 +33,7 @@ from AppKit import (
     NSComboBox,
 )
 from Foundation import NSMakeRange
-from Foundation import NSObject, NSData, NSMakeRect, NSMakePoint, NSString
+from Foundation import NSObject, NSData, NSMakeRect, NSMakePoint, NSString, NSProcessInfo
 from PIL import Image
 
 
@@ -199,7 +199,7 @@ _last_rembg_status = "ok"   # "ok" | "fallback" — read by the UI thread
 # ── App version + auto-update endpoint ────────────────────────────────────
 # Bump __version__ on every release. The update endpoint hosts a tiny JSON
 # manifest of the latest version + download URL + SHA256.
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 _UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/ahmetolcum/"
     "PixelArtConverter/main/update.json"
@@ -218,17 +218,22 @@ def _version_tuple(v: str):
 EDGE_COLOR_OPTION = "Edge color (auto)"
 
 
-# ── ChatGPT / DALL-E prompt template for generating animation frames ──────
+# ── Prompt templates for the AI Prompt Samples window ─────────────────────
 # Variables are wrapped in {NAME} so the template can be rendered with values
 # and we can color those substitutions in the in-app preview.
+#
+# Each (mode, target) pair has its own template. ChatGPT/DALL-E follows
+# loose stylistic prose well; Gemini/Imagen tends to produce plainer, more
+# generic art with the same prompt — so the Gemini variants push harder for
+# iconic mascot detail, thick outlines, gold trim, and explicit accessories.
 
-PROMPT_TEMPLATE_FRAMES = """Generate a single horizontal sprite sheet image showing {N} frames of {SUBJECT} performing {ACTION}. Lay the frames left-to-right in one row, all identical in size, no labels, captions, numbers or borders between them.
+PROMPT_TEMPLATE_FRAMES_CHATGPT = """Generate a single horizontal sprite sheet image showing {N} frames of {SUBJECT} performing {ACTION}. Lay the frames left-to-right in one row, all identical in size, no labels, captions, numbers or borders between them.
 
 HARD RULES (critical for animation consistency):
 • Identical {SUBJECT} in every frame — same proportions, same outfit, same color of every part. The ONLY differences between frames are the body parts (or features) actively moving for this action.
-• Identical camera angle, identical scale, identical position. The character's center point must be in the same pixel position in every frame's bounding box.
+• {VIEW} view of the subject. Identical camera angle, identical scale, identical position. The character's center point must be in the same pixel position in every frame's bounding box.
 • Identical lighting direction — shadows fall the same way in every frame.
-• Background: ONE uniform flat color across all frames (e.g. dark teal #1a3a4a). No gradient, no scenery, no shadows on the background.
+• Background: ONE uniform solid color across all frames (use {BACKGROUND}). No gradient, no scenery, no shadows on the background. The converter app keys this color out automatically.
 
 STYLE:
 • Clean cel-shaded illustration, bold outlines, flat colors with one shadow + one highlight per material. NOT pixel art. NOT photorealistic. NOT painterly.
@@ -240,18 +245,41 @@ OUTPUT:
 
 DO NOT include: frame numbers, text labels, watermarks, transparency, multiple rows, decorative borders."""
 
+PROMPT_TEMPLATE_FRAMES_GEMINI = """Generate a single horizontal sprite sheet image showing {N} frames of {SUBJECT} performing {ACTION}, drawn in the iconic mascot art style of a 2D platformer game. Lay the frames left-to-right in one row, all identical in size, no labels, captions, numbers or borders between them.
+
+ART DIRECTION (must match exactly — do not simplify):
+• Bold, thick, uniform black outlines around every shape and every internal detail. Fully closed contours.
+• Saturated, vivid colors. Add gold or cream-colored trim to robes, belts, hats, capes and boots when relevant for visual identity. Add brown leather for footwear and belts.
+• Cel shading: ONE solid shadow tone + ONE solid highlight tone per material. No gradients, no airbrush blending.
+• Iconic, recognizable, mascot-style character with strong silhouette, clear personality, and rich visual identity — NOT a plain or generic interpretation.
+• Render every detail of {SUBJECT} explicitly: props, accessories, age cues (white beard, wrinkles), facial features (visible eyes), clothing trim, footwear. If the subject is a wizard, include a wooden staff with a colored orb on top.
+
+HARD RULES (critical for animation consistency):
+• Identical {SUBJECT} in every frame — same proportions, same outfit, same color of every part. The ONLY differences between frames are the body parts (or features) actively moving for this action.
+• {VIEW} view of the subject. Identical camera angle, identical scale, identical position. The character's center point must be in the same pixel position in every frame's bounding box.
+• Identical lighting direction — shadows fall the same way in every frame.
+• Background: ONE uniform solid color across all frames (use {BACKGROUND}). No gradient, no scenery, no shadows on the background. The converter app keys this color out automatically.
+
+OUTPUT:
+• Roughly {N}×512 wide × 512 tall ({N} square frames at 512×512 each). PNG.
+• Subject centered in each frame with ~10% padding.
+
+DO NOT include: frame numbers, text labels, watermarks, transparency, multiple rows, decorative borders, plain or under-detailed characters, soft pastel coloring, sketch-style linework."""
+
 PROMPT_DEFAULTS_FRAMES = {
-    "N":       "4",
-    "SUBJECT": "a small wizard with a long blue robe and a pointed hat",
-    "ACTION":  ("a walk cycle: left foot forward (frame 1), both feet together passing (frame 2), "
-                "right foot forward (frame 3), both feet together passing (frame 4)"),
+    "N":          "4",
+    "SUBJECT":    "a small wizard with a long blue robe and a pointed hat",
+    "ACTION":     ("a walk cycle: left foot forward (frame 1), both feet together passing (frame 2), "
+                   "right foot forward (frame 3), both feet together passing (frame 4)"),
+    "VIEW":       "side profile (right)",
+    "BACKGROUND": "dark teal #1a3a4a",
 }
 
 # Single-image mode — generate one illustration ready to be turned into a single
 # pixel-art sprite. Uses the same flat-shaded / solid-background style so the
 # converter's edge-color BG removal and palette quantization work cleanly.
 
-PROMPT_TEMPLATE_SINGLE = """Generate a single illustration of {SUBJECT}, designed to be converted into a pixel-art sprite by an external tool.
+PROMPT_TEMPLATE_SINGLE_CHATGPT = """Generate a single illustration of {SUBJECT}, designed to be converted into a pixel-art sprite by an external tool.
 
 COMPOSITION:
 • {SUBJECT} centered in the image with about 10% padding from every edge.
@@ -272,10 +300,44 @@ OUTPUT:
 
 DO NOT include: text labels, watermarks, transparency, decorative borders, frame numbers."""
 
+PROMPT_TEMPLATE_SINGLE_GEMINI = """Generate a single illustration of {SUBJECT}, drawn in the iconic mascot art style of a 2D platformer game, designed to be converted into a pixel-art sprite by an external tool.
+
+ART DIRECTION (must match exactly — do not simplify):
+• Bold, thick, uniform black outlines around every shape and every internal detail. Fully closed contours.
+• Saturated, vivid colors. Add gold or cream-colored trim to robes, belts, hats, capes and boots when relevant for visual identity. Add brown leather for footwear and belts.
+• Cel shading: ONE solid shadow tone + ONE solid highlight tone per material. No gradients, no airbrush blending.
+• Iconic, recognizable, mascot-style character with strong silhouette, clear personality, and rich visual identity — NOT a plain or generic interpretation.
+• Render every detail of {SUBJECT} explicitly: props, accessories, age cues (white beard, wrinkles), facial features (visible eyes), clothing trim, footwear. If the subject is a wizard, include a wooden staff with a colored orb on top.
+
+COMPOSITION:
+• {SUBJECT} centered in the image with about 10% padding from every edge.
+• {VIEW} view of the subject.
+• Single subject only — no additional scenery, no other objects, no UI elements, no text.
+
+BACKGROUND:
+• ONE uniform solid color across the entire background (use {BACKGROUND}).
+• No gradient, no scenery, no shadows on the background — completely flat. The converter app keys this color out automatically.
+
+OUTPUT:
+• Square 1024×1024 PNG.
+• {SUBJECT} occupies about 80% of the canvas.
+
+DO NOT include: text labels, watermarks, transparency, decorative borders, frame numbers, plain or under-detailed characters, soft pastel coloring, sketch-style linework."""
+
 PROMPT_DEFAULTS_SINGLE = {
     "SUBJECT":    "a small wizard with a long blue robe and a pointed hat, holding a glowing staff",
     "VIEW":       "front-facing 3/4",
     "BACKGROUND": "dark teal #1a3a4a",
+}
+
+# (mode, target) → template. Mode is "frames" or "single"; target is "chatgpt"
+# or "gemini". The default target is ChatGPT since the original templates were
+# tuned for DALL-E.
+PROMPT_TEMPLATES = {
+    ("frames", "chatgpt"): PROMPT_TEMPLATE_FRAMES_CHATGPT,
+    ("frames", "gemini"):  PROMPT_TEMPLATE_FRAMES_GEMINI,
+    ("single", "chatgpt"): PROMPT_TEMPLATE_SINGLE_CHATGPT,
+    ("single", "gemini"):  PROMPT_TEMPLATE_SINGLE_GEMINI,
 }
 
 # Quick-pick presets for the AI Prompt Samples window.
@@ -352,12 +414,19 @@ ACTION_PRESETS = {
         "weapon at full forward extension at the peak of the strike, weight on front foot (frame 3); "
         "follow-through with weapon held low and body recovering toward neutral (frame 4)"),
 
-    "Cast spell (4 frames)": (4,
-        "a magic-casting animation: "
-        "arms held out forward palms up, no glow yet (frame 1); "
-        "small glowing energy forming between the palms, hair beginning to lift (frame 2); "
-        "bright energy ball at full size between the palms, hair fully lifted by the magic (frame 3); "
-        "arms thrust forward in the direction the spell is being released (frame 4)"),
+    "Cast spell — pose only, no FX (4 frames)": (4,
+        "a spell-casting body motion with NO visible spell or magical effect at all — "
+        "pose and body movement only, so any spell visual can be composited in afterwards: "
+        "arms held forward at chest height, palms up, body relaxed and upright (frame 1); "
+        "arms drawn back slightly, hands beginning to come together at the chest, body coiling, "
+        "weight shifting onto the back foot (frame 2); "
+        "hands close together at chest height, body fully coiled and leaning back, "
+        "feet planted, gathering momentum (frame 3); "
+        "arms thrust fully forward with palms facing outward, body uncoiled and leaning forward "
+        "toward the imaginary target, weight on the front foot (frame 4). "
+        "ABSOLUTELY NO glow, no energy ball, no orb, no particles, no aura, no light rays, "
+        "no smoke, no sparkles, no swirls, no magic effects of any kind. The hands and the air "
+        "around and between them must be completely empty — only the character's body is visible."),
 
     "Hurt / damage (2 frames)": (2,
         "a damage reaction: "
@@ -2010,7 +2079,7 @@ class AppDelegate(NSObject):
             d["prompt_win"].makeKeyAndOrderFront_(None)
             return
 
-        rect = NSMakeRect(0, 0, 720, 680)
+        rect = NSMakeRect(0, 0, 720, 800)
         mask = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                 NSWindowStyleMaskResizable)
         win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -2019,16 +2088,16 @@ class AppDelegate(NSObject):
         win.center()
         cv = win.contentView()
 
-        # Header + mode picker
+        # Header + mode/target/preset pickers
         header = self._lbl(
             "Edit the values below. The prompt updates live. Variables are highlighted in blue.",
-            NSMakeRect(20, 640, 680, 22))
+            NSMakeRect(20, 760, 680, 22))
         header.setTextColor_(NSColor.secondaryLabelColor())
         cv.addSubview_(header)
 
-        cv.addSubview_(self._lbl("Type:", NSMakeRect(20, 605, 50, 22)))
+        cv.addSubview_(self._lbl("Type:", NSMakeRect(20, 725, 50, 22)))
         mode_pop = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(75, 603, 250, 26), False)
+            NSMakeRect(75, 723, 250, 26), False)
         mode_pop.addItemWithTitle_("Animation frames sprite sheet")
         mode_pop.addItemWithTitle_("Single image / object")
         mode_pop.selectItemAtIndex_(0)
@@ -2037,21 +2106,33 @@ class AppDelegate(NSObject):
 
         # Action preset popup (Frames-mode only) — picks a pre-written
         # frame-by-frame action choreography.
-        ap_lbl = self._lbl("Action preset:", NSMakeRect(335, 605, 95, 22))
+        ap_lbl = self._lbl("Action preset:", NSMakeRect(335, 725, 95, 22))
         cv.addSubview_(ap_lbl); d["prompt_action_preset_lbl"] = ap_lbl
         ap = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(430, 603, 270, 26), False)
+            NSMakeRect(430, 723, 270, 26), False)
         for name in ACTION_PRESETS.keys():
             ap.addItemWithTitle_(name)
         ap.selectItemAtIndex_(0)   # "Custom" first
         ap.setTarget_(self); ap.setAction_("onPromptActionPreset:")
         cv.addSubview_(ap); d["prompt_action_preset_pop"] = ap
 
+        # Target model — switches between ChatGPT/DALL-E and Gemini/Imagen
+        # variants of the prompt. Gemini variant pushes harder for iconic
+        # mascot detail since plain prompts give it under-detailed art.
+        cv.addSubview_(self._lbl("Target:", NSMakeRect(20, 685, 60, 22)))
+        target_pop = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(75, 683, 250, 26), False)
+        target_pop.addItemWithTitle_("ChatGPT (DALL-E 3)")
+        target_pop.addItemWithTitle_("Gemini (Imagen)")
+        target_pop.selectItemAtIndex_(0)
+        target_pop.setTarget_(self); target_pop.setAction_("onPromptTargetChange:")
+        cv.addSubview_(target_pop); d["prompt_target_pop"] = target_pop
+
         # ── FRAMES MODE FIELDS ────────────────────────────────────────────
         # Frame count
-        f_lbl1 = self._lbl("Frame count (N):", NSMakeRect(20, 565, 130, 22))
+        f_lbl1 = self._lbl("Frame count (N):", NSMakeRect(20, 645, 130, 22))
         cv.addSubview_(f_lbl1)
-        nf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 562, 60, 26))
+        nf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 642, 60, 26))
         nf.setStringValue_(PROMPT_DEFAULTS_FRAMES["N"])
         nf.setBezeled_(True); nf.setEditable_(True); nf.setSelectable_(True)
         nf.setTarget_(self); nf.setAction_("onPromptVarChanged:")
@@ -2059,14 +2140,36 @@ class AppDelegate(NSObject):
         cv.addSubview_(nf); d["prompt_n"] = nf
 
         # Subject (frames)
-        f_lbl2 = self._lbl("Subject:", NSMakeRect(20, 525, 130, 22))
+        f_lbl2 = self._lbl("Subject:", NSMakeRect(20, 605, 130, 22))
         cv.addSubview_(f_lbl2)
-        sf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 522, 545, 26))
+        sf = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 602, 545, 26))
         sf.setStringValue_(PROMPT_DEFAULTS_FRAMES["SUBJECT"])
         sf.setBezeled_(True); sf.setEditable_(True); sf.setSelectable_(True)
         sf.setTarget_(self); sf.setAction_("onPromptVarChanged:")
         sf.setDelegate_(self)
         cv.addSubview_(sf); d["prompt_subject"] = sf
+
+        # View / angle (frames) — combo box: pick from preset list OR type custom
+        f_lbl4 = self._lbl("View:", NSMakeRect(20, 565, 130, 22))
+        cv.addSubview_(f_lbl4)
+        f_view = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 562, 545, 26))
+        for v in VIEW_PRESETS: f_view.addItemWithObjectValue_(v)
+        f_view.setStringValue_(PROMPT_DEFAULTS_FRAMES["VIEW"])
+        f_view.setNumberOfVisibleItems_(8)
+        f_view.setEditable_(True); f_view.setSelectable_(True)
+        f_view.setDelegate_(self)
+        cv.addSubview_(f_view); d["prompt_frames_view"] = f_view
+
+        # Background color (frames) — combo box of common solid colors with hex codes
+        f_lbl5 = self._lbl("Background:", NSMakeRect(20, 525, 130, 22))
+        cv.addSubview_(f_lbl5)
+        f_bg = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 522, 545, 26))
+        for c in BACKGROUND_PRESETS: f_bg.addItemWithObjectValue_(c)
+        f_bg.setStringValue_(PROMPT_DEFAULTS_FRAMES["BACKGROUND"])
+        f_bg.setNumberOfVisibleItems_(8)
+        f_bg.setEditable_(True); f_bg.setSelectable_(True)
+        f_bg.setDelegate_(self)
+        cv.addSubview_(f_bg); d["prompt_frames_bg"] = f_bg
 
         # Action (multi-line)
         f_lbl3 = self._lbl("Action:", NSMakeRect(20, 480, 130, 22))
@@ -2083,13 +2186,14 @@ class AppDelegate(NSObject):
         cv.addSubview_(action_scroll)
         d["prompt_action"] = action_view
         d["prompt_action_scroll"] = action_scroll
-        d["prompt_frames_views"] = [f_lbl1, nf, f_lbl2, sf, f_lbl3, action_scroll]
+        d["prompt_frames_views"] = [f_lbl1, nf, f_lbl2, sf, f_lbl4, f_view,
+                                    f_lbl5, f_bg, f_lbl3, action_scroll]
 
         # ── SINGLE-IMAGE MODE FIELDS ──────────────────────────────────────
         # Subject (single)
-        s_lbl1 = self._lbl("Subject:", NSMakeRect(20, 565, 130, 22))
+        s_lbl1 = self._lbl("Subject:", NSMakeRect(20, 645, 130, 22))
         cv.addSubview_(s_lbl1)
-        s_subj = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 562, 545, 26))
+        s_subj = PasteableTextField.alloc().initWithFrame_(NSMakeRect(155, 642, 545, 26))
         s_subj.setStringValue_(PROMPT_DEFAULTS_SINGLE["SUBJECT"])
         s_subj.setBezeled_(True); s_subj.setEditable_(True); s_subj.setSelectable_(True)
         s_subj.setTarget_(self); s_subj.setAction_("onPromptVarChanged:")
@@ -2097,9 +2201,9 @@ class AppDelegate(NSObject):
         cv.addSubview_(s_subj); d["prompt_single_subject"] = s_subj
 
         # View / angle — combo box: pick from preset list OR type custom
-        s_lbl2 = self._lbl("View:", NSMakeRect(20, 525, 130, 22))
+        s_lbl2 = self._lbl("View:", NSMakeRect(20, 605, 130, 22))
         cv.addSubview_(s_lbl2)
-        s_view = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 522, 545, 26))
+        s_view = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 602, 545, 26))
         for v in VIEW_PRESETS: s_view.addItemWithObjectValue_(v)
         s_view.setStringValue_(PROMPT_DEFAULTS_SINGLE["VIEW"])
         s_view.setNumberOfVisibleItems_(8)
@@ -2108,9 +2212,9 @@ class AppDelegate(NSObject):
         cv.addSubview_(s_view); d["prompt_single_view"] = s_view
 
         # Background color — combo box of common solid colors with hex codes
-        s_lbl3 = self._lbl("Background:", NSMakeRect(20, 485, 130, 22))
+        s_lbl3 = self._lbl("Background:", NSMakeRect(20, 565, 130, 22))
         cv.addSubview_(s_lbl3)
-        s_bg = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 482, 545, 26))
+        s_bg = NSComboBox.alloc().initWithFrame_(NSMakeRect(155, 562, 545, 26))
         for c in BACKGROUND_PRESETS: s_bg.addItemWithObjectValue_(c)
         s_bg.setStringValue_(PROMPT_DEFAULTS_SINGLE["BACKGROUND"])
         s_bg.setNumberOfVisibleItems_(8)
@@ -2153,8 +2257,9 @@ class AppDelegate(NSObject):
         close_btn.setTarget_(self); close_btn.setAction_("onPromptClose:")
         cv.addSubview_(close_btn)
 
-        d["prompt_win"]  = win
-        d["prompt_mode"] = "frames"   # default
+        d["prompt_win"]    = win
+        d["prompt_mode"]   = "frames"    # default
+        d["prompt_target"] = "chatgpt"   # default
         self._render_prompt_view()
         win.makeKeyAndOrderFront_(None)
 
@@ -2172,6 +2277,13 @@ class AppDelegate(NSObject):
         ap_pop = d.get("prompt_action_preset_pop")
         if ap_lbl: ap_lbl.setHidden_(not is_frames)
         if ap_pop: ap_pop.setHidden_(not is_frames)
+        self._render_prompt_view()
+
+    @objc.IBAction
+    def onPromptTargetChange_(self, sender):
+        """Switch between ChatGPT and Gemini prompt variants."""
+        idx = sender.indexOfSelectedItem()
+        self.__dict__["prompt_target"] = "chatgpt" if idx == 0 else "gemini"
         self._render_prompt_view()
 
     @objc.IBAction
@@ -2200,16 +2312,19 @@ class AppDelegate(NSObject):
             }
         action_view = d.get("prompt_action")
         return {
-            "N":       str(d["prompt_n"].stringValue()).strip()       or PROMPT_DEFAULTS_FRAMES["N"],
-            "SUBJECT": str(d["prompt_subject"].stringValue()).strip() or PROMPT_DEFAULTS_FRAMES["SUBJECT"],
-            "ACTION":  str(action_view.string()).strip()              or PROMPT_DEFAULTS_FRAMES["ACTION"],
+            "N":          str(d["prompt_n"].stringValue()).strip()              or PROMPT_DEFAULTS_FRAMES["N"],
+            "SUBJECT":    str(d["prompt_subject"].stringValue()).strip()        or PROMPT_DEFAULTS_FRAMES["SUBJECT"],
+            "ACTION":     str(action_view.string()).strip()                     or PROMPT_DEFAULTS_FRAMES["ACTION"],
+            "VIEW":       str(d["prompt_frames_view"].stringValue()).strip()    or PROMPT_DEFAULTS_FRAMES["VIEW"],
+            "BACKGROUND": str(d["prompt_frames_bg"].stringValue()).strip()      or PROMPT_DEFAULTS_FRAMES["BACKGROUND"],
         }
 
     @objc.python_method
     def _current_prompt_template(self):
-        return (PROMPT_TEMPLATE_SINGLE
-                if self.__dict__.get("prompt_mode", "frames") == "single"
-                else PROMPT_TEMPLATE_FRAMES)
+        d = self.__dict__
+        mode   = d.get("prompt_mode",   "frames")
+        target = d.get("prompt_target", "chatgpt")
+        return PROMPT_TEMPLATES[(mode, target)]
 
     @objc.python_method
     def _render_prompt_view(self):
@@ -2875,6 +2990,18 @@ def _is_dark_view(view):
 def _load_app_icon(app):
     """Load docs/icon.png (or icon-dark.png in Dark mode) as the dock icon."""
     here = os.path.dirname(os.path.abspath(__file__))
+
+    # On Tahoe (macOS 26+), the bundle ships Assets.car with the layered
+    # AppIcon. Let the system handle styling (light/dark/tinted/clear/glass)
+    # natively — setApplicationIconImage_ would override the dynamic layers
+    # with a flat PNG.
+    if os.path.exists(os.path.join(here, "Assets.car")):
+        # operatingSystemVersion() returns a 3-tuple (major, minor, patch)
+        # in this PyObjC version, not an NSOperatingSystemVersion struct.
+        major = NSProcessInfo.processInfo().operatingSystemVersion()[0]
+        if major >= 26:
+            return
+
     dark = _is_dark_appearance(app)
     name = "icon-dark.png" if dark else "icon.png"
     path = os.path.join(here, "docs", name)

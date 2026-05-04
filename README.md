@@ -61,9 +61,16 @@ Pixel Art Converter does all of that, **locally**, in seconds. Drop in your AI i
 
 ### 🤖 AI-first workflow
 
-- **Built-in ChatGPT prompt generator** — fill in Frame Count, Subject, Action; the prompt template renders live with your values highlighted in blue. Copy and paste straight into ChatGPT image generation.
+- **Built-in prompt generator** with two modes (animation sprite sheet / single image) and two targets (**ChatGPT/DALL-E 3** and **Gemini/Imagen**). The Gemini variant explicitly demands iconic mascot detail, thick black outlines, gold trim, and full prop/accessory rendering — the same prompt produces noticeably plainer art on Gemini otherwise.
+- **View** and **Background** dropdowns in both modes — pick from common camera angles (side, front 3/4, isometric, top-down…) and solid background colors that the converter keys out automatically.
+- **Action presets** (walk, run, idle, jump, sit, sword swing, cast spell pose, hurt, death, wave) auto-fill frame-by-frame choreographies. The cast-spell preset is **pose-only with no spell visuals** — composite any spell effect in afterwards.
 - **Edge-color background removal** — purpose-built for the solid-color backgrounds AI tools produce. Far more reliable than AI background removers (rembg / u2net / isnet) on stylized inputs.
 - AI-failure fallbacks: if rembg can't find a subject, the app keeps the original image and warns you instead of silently deleting everything.
+
+### 🍎 Native macOS Tahoe icon
+
+- Ships a **layered `.icon`** (Icon Composer format) compiled into the app's `Assets.car`. macOS Tahoe (26+) renders it dynamically with light, dark, tinted, clear and glass styles — same icon, system-styled.
+- Falls back to a flat `.icns` on Big Sur through Sequoia, so older Macs still get a clean app icon.
 
 ### 🔍 Pro preview
 
@@ -83,7 +90,7 @@ Pixel Art Converter does all of that, **locally**, in seconds. Drop in your AI i
 
 ## 🚀 Quick Start
 
-1. **[Download the .dmg](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** (441 MB), open it, drag **Pixel Art Converter** into your **Applications** folder.
+1. **[Download the .dmg](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** (~445 MB), open it, drag **Pixel Art Converter** into your **Applications** folder.
 2. Open the app. See the section below if macOS blocks it on first launch.
 3. **Drop a PNG** into the app, pick your output size and palette, click **Save Pixel Art PNG**. Done.
 
@@ -200,13 +207,15 @@ In both modes, **one shared palette** is built across all frames so colors don't
 
 ### Generating input with AI
 
-The app includes an **AI Prompt** button that opens a window where you fill in:
+The app includes an **AI Prompt Samples** button that opens a window where you can:
 
-- **Frame count (N)** — typically 4–8 for game animation
-- **Subject** — the character/object that stays consistent across frames
-- **Action** — the motion, with per-frame poses if you want fine control
+- Pick **Type**: animation frames sprite sheet, or a single image
+- Pick **Target** model: **ChatGPT (DALL-E 3)** or **Gemini (Imagen)** — the templates differ. Gemini's variant pushes harder for iconic mascot detail, thick outlines, gold trim, and explicit accessories, since the same prompt tends to give plainer art on Gemini otherwise.
+- Pick an **Action preset** (walk, run, idle, jump, sit, sword swing, cast spell pose, hurt, death, wave) for a ready-made frame-by-frame choreography
+- Fill in **Subject** (the character/object that must stay identical), **View** (camera angle), and **Background** (solid color the converter keys out)
+- For frames mode: **Frame count (N)** and a per-frame **Action** description
 
-Variables are colored in blue in the live-rendered prompt so you can see at a glance what's yours vs boilerplate. Click **Copy Prompt** and paste into ChatGPT.
+Variables are colored in blue in the live-rendered prompt so you can see at a glance what's yours vs boilerplate. Click **Copy Prompt** and paste into ChatGPT or Gemini.
 
 ---
 

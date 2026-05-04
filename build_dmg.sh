@@ -2,9 +2,11 @@
 # Build Pixel Art Converter as a macOS .app + DMG.
 #
 # Pipeline:
-#   1. Generate AppIcon.icns from docs/icon.png (for pre-Tahoe macOS)
-#   2. py2app builds the .app bundle (embeds the .icns)
-#   3. Copy docs/AppIcon.icon (the Tahoe layered icon) into the bundle
+#   1. actool compiles docs/AppIcon.icon → build/AppIcon.icns + build/Assets.car
+#      (.icns = pre-Tahoe fallback, Assets.car = Tahoe layered/styled icon)
+#   2. py2app builds the .app bundle (embeds the .icns via setup.py iconfile)
+#   3. Drop Assets.car into Resources and set CFBundleIconName so Tahoe loads
+#      the layered icon from the asset catalog at runtime
 #   4. hdiutil creates a UDZO-compressed DMG
 #   5. Print the DMG SHA256 (paste into update.json + release notes)
 #
@@ -20,22 +22,24 @@ APP_NAME="Pixel Art Converter"
 APP_PATH="dist/${APP_NAME}.app"
 DMG_PATH="build/PixelArtConverter-${VERSION}.dmg"
 
-# 1. Build AppIcon.icns from docs/icon.png
-echo "▶ Generating AppIcon.icns from docs/icon.png"
-ICONSET=build/AppIcon.iconset
-rm -rf "$ICONSET" build/AppIcon.icns
-mkdir -p "$ICONSET"
-for size in 16 32 64 128 256 512 1024; do
-  sips -z $size $size docs/icon.png --out "$ICONSET/icon_${size}x${size}.png" > /dev/null
-done
-cp "$ICONSET/icon_32x32.png"     "$ICONSET/icon_16x16@2x.png"
-cp "$ICONSET/icon_64x64.png"     "$ICONSET/icon_32x32@2x.png"
-cp "$ICONSET/icon_256x256.png"   "$ICONSET/icon_128x128@2x.png"
-cp "$ICONSET/icon_512x512.png"   "$ICONSET/icon_256x256@2x.png"
-cp "$ICONSET/icon_1024x1024.png" "$ICONSET/icon_512x512@2x.png"
-rm -f "$ICONSET/icon_64x64.png" "$ICONSET/icon_1024x1024.png"
-iconutil -c icns "$ICONSET" -o build/AppIcon.icns
-rm -rf "$ICONSET"
+# 1. Compile docs/AppIcon.icon → AppIcon.icns + Assets.car via actool.
+#    actool emits both: a flat .icns (used on Big Sur–Sonoma) and an
+#    Assets.car holding the layered icon Tahoe styles dynamically.
+echo "▶ Compiling docs/AppIcon.icon via actool"
+ICON_OUT=build/icon-compile
+rm -rf "$ICON_OUT" build/AppIcon.icns build/Assets.car build/icon-info.plist
+mkdir -p "$ICON_OUT"
+xcrun actool --compile "$ICON_OUT" \
+  --platform macosx \
+  --minimum-deployment-target 11.0 \
+  --app-icon AppIcon \
+  --output-partial-info-plist build/icon-info.plist \
+  --output-format human-readable-text \
+  --errors --warnings \
+  docs/AppIcon.icon > /dev/null
+cp "$ICON_OUT/AppIcon.icns" build/AppIcon.icns
+cp "$ICON_OUT/Assets.car"   build/Assets.car
+rm -rf "$ICON_OUT"
 
 # 2. py2app
 echo "▶ py2app — building .app (this can take a few minutes)…"
@@ -43,9 +47,20 @@ rm -rf "$APP_PATH" dist build/PixelArtConverter-*.dmg
 python3 setup.py py2app > /dev/null
 echo "  ✓ ${APP_PATH}"
 
-# 3. Copy the Tahoe layered .icon into Resources
-echo "▶ Copying docs/AppIcon.icon into the bundle (for Tahoe icon-style support)"
-cp -R docs/AppIcon.icon "${APP_PATH}/Contents/Resources/AppIcon.icon"
+# 3. Install the Tahoe layered icon: copy Assets.car and set CFBundleIconName.
+#    Without Assets.car + CFBundleIconName, Tahoe falls back to the flat .icns
+#    and ignores the layered/glass styling.
+echo "▶ Installing Assets.car into the bundle (for Tahoe layered-icon support)"
+cp build/Assets.car "${APP_PATH}/Contents/Resources/Assets.car"
+plutil -replace CFBundleIconFile -string "AppIcon" "${APP_PATH}/Contents/Info.plist"
+plutil -replace CFBundleIconName -string "AppIcon" "${APP_PATH}/Contents/Info.plist"
+
+# 3b. Re-sign ad-hoc. Modifying the bundle after py2app's signing invalidates
+#     the original signature, which Apple Silicon enforces — the app would
+#     SIGKILL on launch with "Code Signature Invalid".
+echo "▶ Re-signing bundle ad-hoc"
+codesign --force --deep --sign - "${APP_PATH}" > /dev/null
+codesign --verify --verbose "${APP_PATH}" 2>&1 | head -2
 
 # 4. Build the DMG
 echo "▶ Creating DMG…"

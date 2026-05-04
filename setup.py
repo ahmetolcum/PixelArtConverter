@@ -35,12 +35,11 @@ OPTIONS = {
         'CFBundleName':                 'Pixel Art Converter',
         'CFBundleDisplayName':          'Pixel Art Converter',
         'CFBundleIdentifier':           'com.ahmetolcum.PixelArtConverter',
-        'CFBundleVersion':              '1.1.1',
-        'CFBundleShortVersionString':   '1.1.1',
+        'CFBundleVersion':              '1.2.0',
+        'CFBundleShortVersionString':   '1.2.0',
         # No extension — macOS Tahoe looks for AppIcon.icon first, falls back
         # to AppIcon.icns on older systems.
         'CFBundleIconFile':             'AppIcon',
-        'CFBundleIconName':             'AppIcon',
         'NSHighResolutionCapable':      True,
         'LSMinimumSystemVersion':       '11.0',
         'NSHumanReadableCopyright':     '© 2026 Ahmet Olcum. MIT licensed.',
