@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+"""
+Pixel Art Converter — cross-platform PySide6 GUI.
+
+Sister of pixel_art_converter.py (the macOS-native AppKit GUI). Both
+import shared image-processing logic, palette tables, prompt templates,
+and presets from core.py. macOS users should keep using the AppKit
+build for native dock-icon / Dark-mode / Tahoe styling; Windows and
+Linux users run this one.
+
+Run from source:
+    python3 -m pip install PySide6 numpy Pillow scikit-image scikit-learn scipy
+    python3 pixel_art_converter_qt.py
+"""
+
+import io
+import os
+import sys
+import threading
+import urllib.request
+
+from PIL import Image
+from PySide6 import QtCore, QtGui, QtWidgets
+
+import core
+
+
+# ── Constants ──────────────────────────────────────────────────────────
+
+PRESETS = [
+    ("16 × 16",   16, 16),  ("32 × 32",   32, 32),  ("32 × 48",   32, 48),
+    ("48 × 48",   48, 48),  ("64 × 64",   64, 64),  ("64 × 96",   64, 96),
+    ("96 × 96",   96, 96),  ("128 × 128", 128, 128), ("256 × 256", 256, 256),
+    ("Custom…",    0,   0),
+]
+
+BG_MODELS = ["isnet-general-use", "isnet-anime", "u2net", "u2net_human_seg",
+             core.EDGE_COLOR_OPTION]
+
+SCALE_MIN = 0.05
+SCALE_MAX = 32.0
+SCALE_PRESETS = [1, 2, 4, 8, 16, 32]
+
+# Auto-convert debounce delay — match AppKit version's responsiveness on
+# slider tweaks (the bilateral-cache hits make repeated runs cheap).
+DEBOUNCE_MS = 150
+
+
+# ── Helpers: PIL ↔ Qt ─────────────────────────────────────────────────
+
+def pil_to_qimage(img: Image.Image) -> QtGui.QImage:
+    """Convert a PIL RGBA image to a QImage (no buffer aliasing)."""
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    data = img.tobytes("raw", "RGBA")
+    qimg = QtGui.QImage(data, img.width, img.height,
+                        4 * img.width, QtGui.QImage.Format.Format_RGBA8888)
+    # .copy() so the underlying PIL bytes can be GC'd without invalidating Qt.
+    return qimg.copy()
+
+
+def pil_to_qpixmap(img: Image.Image) -> QtGui.QPixmap:
+    return QtGui.QPixmap.fromImage(pil_to_qimage(img))
+
+
+# ── Palette swatch bar ────────────────────────────────────────────────
+
+class PaletteBar(QtWidgets.QWidget):
+    """Horizontal row of color swatches — mirrors the AppKit PaletteView."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._colors: list[tuple[int, int, int]] = []
+        self.setMinimumHeight(28)
+
+    def setColors(self, colors):
+        self._colors = list(colors)
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QtGui.QPainter(self)
+        p.fillRect(self.rect(), self.palette().window())
+        if not self._colors:
+            return
+        n = len(self._colors)
+        w = self.width() / n
+        for i, (r, g, b) in enumerate(self._colors):
+            x0 = int(i * w)
+            x1 = int((i + 1) * w)
+            p.fillRect(x0, 0, x1 - x0, self.height(), QtGui.QColor(r, g, b))
+
+
+# ── Checkerboard image preview ────────────────────────────────────────
+
+class ImagePreview(QtWidgets.QGraphicsView):
+    """
+    Pixel-art preview with checkerboard background, nearest-neighbor
+    scaling, mouse-drag pan, and Ctrl/⌘+wheel zoom.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = QtWidgets.QGraphicsScene(self)
+        self.setScene(self._scene)
+        self.setRenderHints(QtGui.QPainter.RenderHint.SmoothPixmapTransform |
+                            QtGui.QPainter.RenderHint.TextAntialiasing)
+        self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
+        self.setTransformationAnchor(self.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(self.ViewportAnchor.AnchorUnderMouse)
+        self.setDragMode(self.DragMode.ScrollHandDrag)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setBackgroundBrush(self._make_checker())
+        self._pixitem: QtWidgets.QGraphicsPixmapItem | None = None
+
+    @staticmethod
+    def _make_checker() -> QtGui.QBrush:
+        size = 16
+        pix = QtGui.QPixmap(size, size)
+        pix.fill(QtGui.QColor(220, 220, 220))
+        p = QtGui.QPainter(pix)
+        p.fillRect(0, 0, size // 2, size // 2,    QtGui.QColor(180, 180, 180))
+        p.fillRect(size // 2, size // 2, size // 2, size // 2,
+                   QtGui.QColor(180, 180, 180))
+        p.end()
+        return QtGui.QBrush(pix)
+
+    def setImage(self, img: Image.Image | None):
+        self._scene.clear()
+        self._pixitem = None
+        if img is None:
+            return
+        pm = pil_to_qpixmap(img)
+        self._pixitem = self._scene.addPixmap(pm)
+        # nearest-neighbor for crisp pixels
+        self._pixitem.setTransformationMode(QtCore.Qt.TransformationMode.FastTransformation)
+        self._scene.setSceneRect(QtCore.QRectF(pm.rect()))
+        self.fitInView(self._pixitem, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+
+    def fit(self):
+        if self._pixitem is not None:
+            self.fitInView(self._pixitem, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+
+    def wheelEvent(self, ev: QtGui.QWheelEvent):
+        if ev.modifiers() & (QtCore.Qt.KeyboardModifier.ControlModifier
+                             | QtCore.Qt.KeyboardModifier.MetaModifier):
+            factor = 1.25 if ev.angleDelta().y() > 0 else 0.8
+            new_scale = self.transform().m11() * factor
+            if SCALE_MIN <= new_scale <= SCALE_MAX:
+                self.scale(factor, factor)
+            ev.accept()
+        else:
+            super().wheelEvent(ev)
+
+
+# ── Worker: runs core.make_pixel_art on a background thread ───────────
+
+class ConvertWorker(QtCore.QObject):
+    finished = QtCore.Signal(object, list, str)   # result PIL, frames list, status
+    failed   = QtCore.Signal(str)
+
+    @QtCore.Slot(dict)
+    def run(self, args: dict):
+        try:
+            core._last_rembg_status = "ok"
+            frames = args["frames"]
+            params = dict(
+                w=args["w"], h=args["h"], num_colors=args["colors"],
+                dither=args["dither"], remove_bg=args["remove_bg"],
+                outline=args["outline"], bg_model=args["bg_model"],
+                fixed_palette=args["fixed_palette"],
+                brightness=args["brightness"], contrast=args["contrast"],
+                saturation=args["saturation"],
+            )
+            if len(frames) > 1:
+                out_frames = core.make_pixel_art_animation(frames, **params)
+                result = core.compose_sprite_sheet(out_frames)
+                self.finished.emit(result, out_frames, core._last_rembg_status)
+            else:
+                result = core.make_pixel_art(frames[0], **params)
+                self.finished.emit(result, [result], core._last_rembg_status)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self.failed.emit(str(e))
+
+
+# ── AI Prompt Samples dialog ──────────────────────────────────────────
+
+class PromptSamplesDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI Prompt Samples")
+        self.resize(720, 800)
+        self._build_ui()
+        self._render()
+
+    def _build_ui(self):
+        outer = QtWidgets.QVBoxLayout(self)
+
+        # Mode + target row
+        top = QtWidgets.QHBoxLayout()
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItems(["Frames (sprite sheet)", "Single image"])
+        self.target_combo = QtWidgets.QComboBox()
+        self.target_combo.addItems(["ChatGPT (DALL-E 3)", "Gemini (Imagen)"])
+        top.addWidget(QtWidgets.QLabel("Mode:"))
+        top.addWidget(self.mode_combo, 1)
+        top.addWidget(QtWidgets.QLabel("Target:"))
+        top.addWidget(self.target_combo, 1)
+        outer.addLayout(top)
+
+        # Stacked: frames vs single
+        self.stack = QtWidgets.QStackedWidget()
+        self.stack.addWidget(self._build_frames_panel())
+        self.stack.addWidget(self._build_single_panel())
+        outer.addWidget(self.stack)
+
+        # Rendered preview
+        self.preview = QtWidgets.QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setFont(QtGui.QFont(
+            "Menlo,Consolas,Courier New", 11))
+        outer.addWidget(self.preview, 2)
+
+        # Bottom: Copy + Close
+        btns = QtWidgets.QHBoxLayout()
+        self.copy_btn = QtWidgets.QPushButton("Copy")
+        close_btn = QtWidgets.QPushButton("Close")
+        btns.addStretch()
+        btns.addWidget(self.copy_btn)
+        btns.addWidget(close_btn)
+        outer.addLayout(btns)
+
+        # Wire signals
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.target_combo.currentIndexChanged.connect(self._render)
+        self.copy_btn.clicked.connect(self._copy)
+        close_btn.clicked.connect(self.accept)
+
+    def _build_frames_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(w)
+        d = core.PROMPT_DEFAULTS_FRAMES
+
+        self.f_action_preset = QtWidgets.QComboBox()
+        self.f_action_preset.addItems(list(core.ACTION_PRESETS.keys()))
+        self.f_action_preset.currentTextChanged.connect(self._on_action_preset)
+
+        self.f_n = QtWidgets.QLineEdit(d["N"])
+        self.f_subject = QtWidgets.QLineEdit(d["SUBJECT"])
+
+        self.f_view = QtWidgets.QComboBox()
+        self.f_view.setEditable(True)
+        self.f_view.addItems(core.VIEW_PRESETS)
+        self.f_view.setCurrentText(d["VIEW"])
+
+        self.f_bg = QtWidgets.QComboBox()
+        self.f_bg.setEditable(True)
+        self.f_bg.addItems(core.BACKGROUND_PRESETS)
+        self.f_bg.setCurrentText(d["BACKGROUND"])
+
+        self.f_action = QtWidgets.QPlainTextEdit(d["ACTION"])
+        self.f_action.setMaximumHeight(110)
+
+        form.addRow("Preset:",     self.f_action_preset)
+        form.addRow("Frames (N):", self.f_n)
+        form.addRow("Subject:",    self.f_subject)
+        form.addRow("View:",       self.f_view)
+        form.addRow("Background:", self.f_bg)
+        form.addRow("Action:",     self.f_action)
+
+        for widget in [self.f_n, self.f_subject, self.f_action]:
+            widget.textChanged.connect(self._render)
+        for widget in [self.f_view, self.f_bg]:
+            widget.currentTextChanged.connect(self._render)
+        return w
+
+    def _build_single_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(w)
+        d = core.PROMPT_DEFAULTS_SINGLE
+
+        self.s_subject = QtWidgets.QLineEdit(d["SUBJECT"])
+        self.s_view = QtWidgets.QComboBox()
+        self.s_view.setEditable(True)
+        self.s_view.addItems(core.VIEW_PRESETS)
+        self.s_view.setCurrentText(d["VIEW"])
+        self.s_bg = QtWidgets.QComboBox()
+        self.s_bg.setEditable(True)
+        self.s_bg.addItems(core.BACKGROUND_PRESETS)
+        self.s_bg.setCurrentText(d["BACKGROUND"])
+
+        form.addRow("Subject:",    self.s_subject)
+        form.addRow("View:",       self.s_view)
+        form.addRow("Background:", self.s_bg)
+
+        self.s_subject.textChanged.connect(self._render)
+        self.s_view.currentTextChanged.connect(self._render)
+        self.s_bg.currentTextChanged.connect(self._render)
+        return w
+
+    def _on_mode_change(self, idx: int):
+        self.stack.setCurrentIndex(idx)
+        self._render()
+
+    def _on_action_preset(self, name: str):
+        n, action = core.ACTION_PRESETS.get(name, (None, None))
+        if n is not None:
+            self.f_n.setText(str(n))
+        if action is not None:
+            self.f_action.setPlainText(action)
+        self._render()
+
+    def _current_template(self):
+        mode   = "frames" if self.mode_combo.currentIndex() == 0 else "single"
+        target = "chatgpt" if self.target_combo.currentIndex() == 0 else "gemini"
+        return core.PROMPT_TEMPLATES[(mode, target)]
+
+    def _current_values(self) -> dict:
+        if self.mode_combo.currentIndex() == 0:
+            return {
+                "N":          self.f_n.text().strip()           or core.PROMPT_DEFAULTS_FRAMES["N"],
+                "SUBJECT":    self.f_subject.text().strip()     or core.PROMPT_DEFAULTS_FRAMES["SUBJECT"],
+                "ACTION":     self.f_action.toPlainText().strip()
+                              or core.PROMPT_DEFAULTS_FRAMES["ACTION"],
+                "VIEW":       self.f_view.currentText().strip() or core.PROMPT_DEFAULTS_FRAMES["VIEW"],
+                "BACKGROUND": self.f_bg.currentText().strip()   or core.PROMPT_DEFAULTS_FRAMES["BACKGROUND"],
+            }
+        return {
+            "SUBJECT":    self.s_subject.text().strip()     or core.PROMPT_DEFAULTS_SINGLE["SUBJECT"],
+            "VIEW":       self.s_view.currentText().strip() or core.PROMPT_DEFAULTS_SINGLE["VIEW"],
+            "BACKGROUND": self.s_bg.currentText().strip()   or core.PROMPT_DEFAULTS_SINGLE["BACKGROUND"],
+        }
+
+    def _render(self):
+        text, ranges = core.render_prompt(self._current_template(),
+                                          self._current_values())
+        # Render with substituted ranges colored.
+        self.preview.clear()
+        cursor = self.preview.textCursor()
+        i = 0
+        accent = QtGui.QColor(0, 122, 255)   # macOS-ish blue
+        normal_fmt = QtGui.QTextCharFormat()
+        accent_fmt = QtGui.QTextCharFormat()
+        accent_fmt.setForeground(QtGui.QBrush(accent))
+        accent_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+        for start, length in ranges:
+            if i < start:
+                cursor.insertText(text[i:start], normal_fmt)
+            cursor.insertText(text[start:start+length], accent_fmt)
+            i = start + length
+        if i < len(text):
+            cursor.insertText(text[i:], normal_fmt)
+
+    def _copy(self):
+        text, _ = core.render_prompt(self._current_template(),
+                                     self._current_values())
+        QtWidgets.QApplication.clipboard().setText(text)
+        self.copy_btn.setText("Copied!")
+        QtCore.QTimer.singleShot(1200, lambda: self.copy_btn.setText("Copy"))
+
+
+# ── Main window ───────────────────────────────────────────────────────
+
+class MainWindow(QtWidgets.QMainWindow):
+    convert_requested = QtCore.Signal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"Pixel Art Converter v{core.__version__}")
+        self.resize(1280, 820)
+        self.setAcceptDrops(True)
+
+        self._frames: list[Image.Image] = []     # input frames (1 = single image)
+        self._result_img: Image.Image | None = None
+        self._result_frames: list[Image.Image] = []
+        self._loaded_lospec: dict = {}           # name -> hex_list (user-loaded)
+        self._sheet_cols = 1
+        self._sheet_rows = 1
+
+        self._build_ui()
+        self._build_menu()
+        self._spawn_worker()
+
+        # Debounce timer for slider-driven auto-convert
+        self._debounce = QtCore.QTimer(self, singleShot=True)
+        self._debounce.setInterval(DEBOUNCE_MS)
+        self._debounce.timeout.connect(self.do_convert)
+
+    # ---- UI construction ------------------------------------------------
+
+    def _build_menu(self):
+        bar = self.menuBar()
+        m_file = bar.addMenu("&File")
+        a_open = m_file.addAction("Open Image…")
+        a_open.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+        a_open.triggered.connect(self.on_open)
+        a_save = m_file.addAction("Save Output As…")
+        a_save.setShortcut(QtGui.QKeySequence.StandardKey.Save)
+        a_save.triggered.connect(self.on_save)
+        m_file.addSeparator()
+        a_quit = m_file.addAction("Quit")
+        a_quit.setShortcut(QtGui.QKeySequence.StandardKey.Quit)
+        a_quit.triggered.connect(self.close)
+
+        m_image = bar.addMenu("&Image")
+        a_new = m_image.addAction("New Image (Reset)")
+        a_new.triggered.connect(self.on_new_image)
+        a_image_prompt = m_image.addAction("AI Prompt Samples…")
+        a_image_prompt.triggered.connect(self.on_show_prompts)
+
+    def _build_ui(self):
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.addWidget(self._build_controls_panel())
+        splitter.addWidget(self._build_preview_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([420, 860])
+        self.setCentralWidget(splitter)
+
+        self.statusBar().showMessage("Drop an image or use File → Open.")
+
+    def _build_controls_panel(self) -> QtWidgets.QWidget:
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        host = QtWidgets.QWidget()
+        scroll.setWidget(host)
+        v = QtWidgets.QVBoxLayout(host)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(10)
+
+        # Open / New buttons
+        row = QtWidgets.QHBoxLayout()
+        b_open = QtWidgets.QPushButton("Open Image…")
+        b_open.clicked.connect(self.on_open)
+        b_new = QtWidgets.QPushButton("New Image")
+        b_new.clicked.connect(self.on_new_image)
+        row.addWidget(b_open); row.addWidget(b_new)
+        v.addLayout(row)
+
+        # Sprite-sheet split
+        v.addWidget(self._section_label("Sprite-sheet split"))
+        ssr = QtWidgets.QHBoxLayout()
+        self.cols_spin = QtWidgets.QSpinBox(); self.cols_spin.setRange(1, 32); self.cols_spin.setValue(1)
+        self.rows_spin = QtWidgets.QSpinBox(); self.rows_spin.setRange(1, 32); self.rows_spin.setValue(1)
+        b_split = QtWidgets.QPushButton("Split")
+        b_split.clicked.connect(self.on_split_sheet)
+        ssr.addWidget(QtWidgets.QLabel("Cols:")); ssr.addWidget(self.cols_spin)
+        ssr.addSpacing(10)
+        ssr.addWidget(QtWidgets.QLabel("Rows:")); ssr.addWidget(self.rows_spin)
+        ssr.addSpacing(10); ssr.addWidget(b_split); ssr.addStretch()
+        v.addLayout(ssr)
+
+        # Output dimensions
+        v.addWidget(self._section_label("Output dimensions"))
+        self.preset_combo = QtWidgets.QComboBox()
+        for name, _, _ in PRESETS:
+            self.preset_combo.addItem(name)
+        self.preset_combo.setCurrentText("64 × 64")
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_change)
+
+        dim_row = QtWidgets.QHBoxLayout()
+        self.w_spin = QtWidgets.QSpinBox(); self.w_spin.setRange(2, 4096); self.w_spin.setValue(64)
+        self.h_spin = QtWidgets.QSpinBox(); self.h_spin.setRange(2, 4096); self.h_spin.setValue(64)
+        dim_row.addWidget(QtWidgets.QLabel("W:")); dim_row.addWidget(self.w_spin)
+        dim_row.addWidget(QtWidgets.QLabel("H:")); dim_row.addWidget(self.h_spin)
+        dim_row.addStretch()
+        v.addWidget(self.preset_combo)
+        v.addLayout(dim_row)
+
+        # Colors
+        v.addWidget(self._section_label("Colors"))
+        cr = QtWidgets.QHBoxLayout()
+        self.colors_spin = QtWidgets.QSpinBox(); self.colors_spin.setRange(2, 64); self.colors_spin.setValue(16)
+        cr.addWidget(QtWidgets.QLabel("Number of colors:"))
+        cr.addWidget(self.colors_spin); cr.addStretch()
+        v.addLayout(cr)
+
+        # Palette
+        self.palette_combo = QtWidgets.QComboBox()
+        for name in core.LOSPEC_PALETTES.keys():
+            self.palette_combo.addItem(name)
+        self.palette_combo.addItem(core.LOSPEC_LOAD_OPTION)
+        self.palette_combo.currentTextChanged.connect(self._on_palette_change)
+        v.addWidget(QtWidgets.QLabel("Palette:"))
+        v.addWidget(self.palette_combo)
+
+        self.palette_bar = PaletteBar()
+        v.addWidget(self.palette_bar)
+
+        # Toggles
+        v.addWidget(self._section_label("Options"))
+        self.dither_chk  = QtWidgets.QCheckBox("Dither (Bayer 8×8)")
+        self.outline_chk = QtWidgets.QCheckBox("Outline (selout)")
+        self.outline_chk.setChecked(True)
+        self.rembg_chk   = QtWidgets.QCheckBox("Remove background")
+        self.rembg_chk.setChecked(True)
+        v.addWidget(self.dither_chk)
+        v.addWidget(self.outline_chk)
+        v.addWidget(self.rembg_chk)
+
+        bg_row = QtWidgets.QHBoxLayout()
+        self.bg_combo = QtWidgets.QComboBox()
+        self.bg_combo.addItems(BG_MODELS)
+        self.bg_combo.setCurrentText(core.EDGE_COLOR_OPTION)
+        bg_row.addWidget(QtWidgets.QLabel("BG model:"))
+        bg_row.addWidget(self.bg_combo, 1)
+        v.addLayout(bg_row)
+
+        # Adjustments
+        v.addWidget(self._section_label("Adjustments"))
+        self.brightness_slider, self.brightness_lbl = self._slider_row(v, "Brightness", -100, 100, 0)
+        self.contrast_slider,   self.contrast_lbl   = self._slider_row(v, "Contrast",   -100, 100, 0)
+        self.saturation_slider, self.saturation_lbl = self._slider_row(v, "Saturation", -100, 100, 0)
+
+        # Convert / Save buttons
+        v.addSpacing(8)
+        cv = QtWidgets.QHBoxLayout()
+        self.convert_btn = QtWidgets.QPushButton("Convert")
+        self.convert_btn.clicked.connect(self.do_convert)
+        self.convert_btn.setDefault(True)
+        self.save_btn = QtWidgets.QPushButton("Save Output…")
+        self.save_btn.clicked.connect(self.on_save)
+        cv.addWidget(self.convert_btn); cv.addWidget(self.save_btn)
+        v.addLayout(cv)
+
+        v.addStretch()
+
+        # Wire up auto-convert triggers (debounced)
+        for w in [self.w_spin, self.h_spin, self.colors_spin]:
+            w.valueChanged.connect(self._schedule_convert)
+        for chk in [self.dither_chk, self.outline_chk, self.rembg_chk]:
+            chk.toggled.connect(self._schedule_convert)
+        self.bg_combo.currentTextChanged.connect(self._schedule_convert)
+        for s in [self.brightness_slider, self.contrast_slider, self.saturation_slider]:
+            s.valueChanged.connect(self._schedule_convert)
+        self.palette_combo.currentTextChanged.connect(self._schedule_convert)
+
+        return scroll
+
+    def _build_preview_panel(self) -> QtWidgets.QWidget:
+        host = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(host); v.setContentsMargins(8, 8, 8, 8); v.setSpacing(8)
+
+        tabs = QtWidgets.QTabWidget()
+        self.original_view = ImagePreview()
+        self.output_view   = ImagePreview()
+        tabs.addTab(self.original_view, "Original")
+        tabs.addTab(self.output_view,   "Pixel art")
+        tabs.setCurrentIndex(1)
+        v.addWidget(tabs)
+        self.tabs = tabs
+
+        # Quick info row
+        self.info_label = QtWidgets.QLabel("")
+        self.info_label.setStyleSheet("color: gray;")
+        v.addWidget(self.info_label)
+
+        return host
+
+    @staticmethod
+    def _section_label(text: str) -> QtWidgets.QLabel:
+        lbl = QtWidgets.QLabel(text)
+        f = lbl.font(); f.setBold(True); lbl.setFont(f)
+        return lbl
+
+    def _slider_row(self, parent_layout, label, lo, hi, default):
+        row = QtWidgets.QHBoxLayout()
+        s = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        s.setRange(lo, hi); s.setValue(default); s.setMinimumWidth(180)
+        v_lbl = QtWidgets.QLabel(f"{default:+d}")
+        v_lbl.setMinimumWidth(36)
+        row.addWidget(QtWidgets.QLabel(label))
+        row.addWidget(s, 1)
+        row.addWidget(v_lbl)
+        parent_layout.addLayout(row)
+        s.valueChanged.connect(lambda v, lbl=v_lbl: lbl.setText(f"{v:+d}"))
+        return s, v_lbl
+
+    # ---- Worker thread setup -------------------------------------------
+
+    def _spawn_worker(self):
+        self._worker_thread = QtCore.QThread(self)
+        self._worker = ConvertWorker()
+        self._worker.moveToThread(self._worker_thread)
+        self._worker_thread.start()
+        self.convert_requested.connect(self._worker.run)
+        self._worker.finished.connect(self._on_convert_done)
+        self._worker.failed.connect(self._on_convert_failed)
+        # Stop the thread on app quit too — closeEvent only covers the
+        # user-clicks-X path, not GC-time teardown.
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_worker)
+
+    def _stop_worker(self):
+        if self._worker_thread.isRunning():
+            self._worker_thread.quit()
+            self._worker_thread.wait(2000)
+
+    def closeEvent(self, ev: QtGui.QCloseEvent):
+        self._stop_worker()
+        super().closeEvent(ev)
+
+    # ---- Drag & drop ----------------------------------------------------
+
+    def dragEnterEvent(self, ev: QtGui.QDragEnterEvent):
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+
+    def dropEvent(self, ev: QtGui.QDropEvent):
+        urls = ev.mimeData().urls()
+        if not urls:
+            return
+        path = urls[0].toLocalFile()
+        if path:
+            self._load_path(path)
+
+    # ---- File ops -------------------------------------------------------
+
+    def on_open(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open Image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)")
+        if path:
+            self._load_path(path)
+
+    def _load_path(self, path: str):
+        try:
+            img = Image.open(path).convert("RGBA")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Open failed", str(e))
+            return
+        self._frames = [img]
+        self._sheet_cols = 1
+        self._sheet_rows = 1
+        self.cols_spin.setValue(1); self.rows_spin.setValue(1)
+        self.original_view.setImage(img)
+        self.original_view.fit()
+        self.info_label.setText(
+            f"Loaded {os.path.basename(path)} — {img.width}×{img.height}")
+        self.statusBar().showMessage(os.path.basename(path))
+        self.do_convert()
+
+    def on_new_image(self):
+        self._frames = []
+        self._result_img = None
+        self._result_frames = []
+        self.original_view.setImage(None)
+        self.output_view.setImage(None)
+        self.palette_bar.setColors([])
+        self.info_label.setText("")
+        self.statusBar().showMessage("Drop an image or use File → Open.")
+
+    def on_split_sheet(self):
+        if not self._frames:
+            return
+        cols = self.cols_spin.value()
+        rows = self.rows_spin.value()
+        if cols == 1 and rows == 1:
+            return
+        # Re-split from the *original* loaded image
+        sheet = self._frames[0] if self._sheet_cols == 1 and self._sheet_rows == 1 \
+                                  else core.compose_sprite_sheet(self._frames)
+        self._frames = core.split_sprite_sheet(sheet, cols, rows)
+        self._sheet_cols, self._sheet_rows = cols, rows
+        self.info_label.setText(
+            f"Split into {len(self._frames)} frames "
+            f"({self._frames[0].width}×{self._frames[0].height} each)")
+        self.do_convert()
+
+    def on_save(self):
+        if self._result_img is None:
+            QtWidgets.QMessageBox.information(self, "Nothing to save",
+                                              "Convert an image first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Output", "pixel_art.png",
+            "PNG image (*.png);;All files (*.*)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        try:
+            self._result_img.save(path, "PNG")
+            self.statusBar().showMessage(f"Saved → {path}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Save failed", str(e))
+
+    # ---- Settings change handlers --------------------------------------
+
+    def _on_preset_change(self, _idx: int):
+        name = self.preset_combo.currentText()
+        for n, w, h in PRESETS:
+            if n == name and (w, h) != (0, 0):
+                self.w_spin.setValue(w); self.h_spin.setValue(h)
+                self._schedule_convert()
+                return
+        # Custom… — leave spinboxes alone, let user edit them.
+
+    def _on_palette_change(self, name: str):
+        if name == core.LOSPEC_LOAD_OPTION:
+            self._prompt_load_lospec()
+
+    def _prompt_load_lospec(self):
+        slug, ok = QtWidgets.QInputDialog.getText(
+            self, "Load Lospec palette",
+            "Lospec slug or URL (e.g. 'pico-8' or "
+            "https://lospec.com/palette-list/pico-8):")
+        if not ok or not slug.strip():
+            self.palette_combo.setCurrentIndex(0)
+            return
+        try:
+            display, hex_list = core.fetch_lospec_palette(slug.strip())
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Lospec fetch failed", str(e))
+            self.palette_combo.setCurrentIndex(0)
+            return
+        # Insert above the "Load…" option, select it.
+        if display in self._loaded_lospec:
+            idx = self.palette_combo.findText(display)
+        else:
+            self._loaded_lospec[display] = hex_list
+            idx = self.palette_combo.count() - 1
+            self.palette_combo.insertItem(idx, display)
+        self.palette_combo.setCurrentIndex(idx)
+
+    # ---- Convert flow ---------------------------------------------------
+
+    def _schedule_convert(self, *_):
+        if not self._frames:
+            return
+        self._debounce.start()
+
+    def _gather_args(self) -> dict | None:
+        if not self._frames:
+            return None
+        name = self.palette_combo.currentText()
+        fixed_palette = None
+        if name == core.LOSPEC_LOAD_OPTION:
+            return None
+        if name in core.LOSPEC_PALETTES and core.LOSPEC_PALETTES[name]:
+            fixed_palette = core._palette_to_rgb_array(core.LOSPEC_PALETTES[name])
+        elif name in self._loaded_lospec:
+            fixed_palette = core._palette_to_rgb_array(self._loaded_lospec[name])
+        return {
+            "frames":       [f.copy() for f in self._frames],
+            "w":            self.w_spin.value(),
+            "h":            self.h_spin.value(),
+            "colors":       self.colors_spin.value(),
+            "dither":       self.dither_chk.isChecked(),
+            "remove_bg":    self.rembg_chk.isChecked(),
+            "outline":      self.outline_chk.isChecked(),
+            "bg_model":     self.bg_combo.currentText(),
+            "fixed_palette": fixed_palette,
+            "brightness":   self.brightness_slider.value(),
+            "contrast":     self.contrast_slider.value(),
+            "saturation":   self.saturation_slider.value(),
+        }
+
+    @QtCore.Slot()
+    def do_convert(self):
+        args = self._gather_args()
+        if args is None:
+            return
+        self.convert_btn.setEnabled(False)
+        self.statusBar().showMessage("Converting…")
+        self.convert_requested.emit(args)
+
+    @QtCore.Slot(object, list, str)
+    def _on_convert_done(self, result, frames, status):
+        self.convert_btn.setEnabled(True)
+        self._result_img = result
+        self._result_frames = frames
+        self.output_view.setImage(result)
+        self.output_view.fit()
+        self.palette_bar.setColors(core.extract_palette(result))
+        msg = f"Done — {result.width}×{result.height}"
+        if status == "fallback":
+            msg += " (BG removal fell back: original passed through)"
+        self.statusBar().showMessage(msg)
+        self.tabs.setCurrentIndex(1)
+
+    @QtCore.Slot(str)
+    def _on_convert_failed(self, err: str):
+        self.convert_btn.setEnabled(True)
+        QtWidgets.QMessageBox.critical(self, "Conversion failed", err)
+        self.statusBar().showMessage("Conversion failed")
+
+    # ---- Menus ----------------------------------------------------------
+
+    def on_show_prompts(self):
+        dlg = PromptSamplesDialog(self)
+        dlg.exec()
+
+
+# ── Entry point ───────────────────────────────────────────────────────
+
+def main():
+    QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(
+        QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    app = QtWidgets.QApplication(sys.argv)
+    app.setApplicationName("Pixel Art Converter")
+    app.setApplicationVersion(core.__version__)
+
+    # Try to load the same icon the mac app uses, if present.
+    here = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(here, "docs", "icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QtGui.QIcon(icon_path))
+
+    win = MainWindow()
+    win.show()
+
+    # Open file argv (Windows / Linux drop-on-icon)
+    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+        win._load_path(sys.argv[1])
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
