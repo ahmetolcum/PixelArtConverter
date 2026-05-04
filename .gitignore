@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build outputs (py2app, PyInstaller, etc.)
+build/
+dist/
+*.dmg
+*.pkg
+*.app
+
+# In-app updater backup
+pixel_art_converter.py.bak
+
+# Local user palettes (these live in ~/Library, but in case anyone copies them in)
+palettes.json
