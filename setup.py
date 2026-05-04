@@ -35,8 +35,8 @@ OPTIONS = {
         'CFBundleName':                 'Pixel Art Converter',
         'CFBundleDisplayName':          'Pixel Art Converter',
         'CFBundleIdentifier':           'com.ahmetolcum.PixelArtConverter',
-        'CFBundleVersion':              '1.2.0',
-        'CFBundleShortVersionString':   '1.2.0',
+        'CFBundleVersion':              '2.0.0',
+        'CFBundleShortVersionString':   '2.0.0',
         # No extension — macOS Tahoe looks for AppIcon.icon first, falls back
         # to AppIcon.icns on older systems.
         'CFBundleIconFile':             'AppIcon',
