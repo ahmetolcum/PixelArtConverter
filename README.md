@@ -83,11 +83,53 @@ Pixel Art Converter does all of that, **locally**, in seconds. Drop in your AI i
 
 ## 🚀 Quick Start
 
-1. **[Download the .dmg](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** and drag the app into Applications.
-2. **First launch:** macOS Gatekeeper may block an unsigned app. Right-click the app → **Open** → confirm. After this once, normal double-click works.
+1. **[Download the .dmg](https://github.com/ahmetolcum/PixelArtConverter/releases/latest)** (441 MB), open it, drag **Pixel Art Converter** into your **Applications** folder.
+2. Open the app. See the section below if macOS blocks it on first launch.
 3. **Drop a PNG** into the app, pick your output size and palette, click **Save Pixel Art PNG**. Done.
 
 For animation: drop multiple PNGs at once (or tick **Sprite Sheet** and drop one grid image), and the **Save** button produces a sprite sheet PNG with palette-coherent colors across every frame.
+
+### ⚠️ Opening an unsigned macOS app — first launch only
+
+The current release is **not yet signed** with an Apple Developer certificate (planned for v1.1). On first launch, macOS Gatekeeper will refuse to open the app and show one of these messages:
+
+> *"Pixel Art Converter" cannot be opened because the developer cannot be verified.*
+
+> *"Pixel Art Converter" is damaged and can't be opened. You should move it to the Trash.* (This appears on Sequoia/Tahoe; the app is not actually damaged — Gatekeeper marks unsigned downloads with a quarantine flag.)
+
+You only need to do **one** of the following the **first time** you launch. After that, the app opens normally with a double-click.
+
+**Option A — Right-click → Open (works on all macOS versions):**
+
+1. **Right-click** (or two-finger click / Control-click) the app in Applications → choose **Open**
+2. Click **Open** in the confirmation dialog
+3. Done. Future launches work normally.
+
+**Option B — System Settings (if Option A doesn't appear):**
+
+1. Try to open the app normally; macOS will block it
+2. Open **System Settings → Privacy & Security**, scroll to **Security**
+3. You'll see *"'Pixel Art Converter' was blocked from use…"* — click **Open Anyway**
+4. Re-launch the app, click **Open** in the confirmation
+
+**Option C — Terminal (Sequoia / Tahoe, when the "damaged" message appears):**
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Pixel Art Converter.app"
+```
+
+This removes the quarantine flag set on downloads. Then double-click the app — it opens normally.
+
+This is **standard for unsigned indie apps**. The app does nothing it doesn't claim — all source is in this repo. The signed v1.1 release will eliminate the warning.
+
+### Verify the download (optional)
+
+If you want to verify the DMG matches what's published:
+
+```bash
+shasum -a 256 ~/Downloads/PixelArtConverter-1.0.0.dmg
+# expected: e0f9cfb43ec160ca5afd0d4e6194761f92a17b790949ffa29a5b0cf55769d051
+```
 
 ---
 
