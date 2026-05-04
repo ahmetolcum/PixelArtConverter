@@ -128,7 +128,7 @@ If you want to verify the DMG matches what's published:
 
 ```bash
 shasum -a 256 ~/Downloads/PixelArtConverter-1.0.0.dmg
-# expected: 500f2784539398a4be9b8bdb5421be07d247453262be1556569d76b88144033f
+# expected: 4f9d11a7349b65f595e7aa94de5361f51c2966f73fb7fc982037b5d96936d029
 ```
 
 ---
@@ -221,27 +221,46 @@ hdiutil create -volname "Pixel Art Converter" -srcfolder dist/ -ov -format UDZO 
 
 ## 🍎 macOS Tahoe icon-style support
 
-In macOS Tahoe (System Settings → Appearance → Icon style), users can pick **Default / Dark / Clear / Tinted** and the dock recolors compatible app icons to match. To opt in, an app needs a **layered `.icon` file** built with **Icon Composer** (Xcode 16/17), bundled in the `.app`.
+In macOS Tahoe (System Settings → Appearance → Icon style), users can pick **Default / Dark / Clear / Tinted** and the dock recolors compatible app icons to match. **The v1.0.0 release supports all four styles** — the bundled `.app` ships with a layered `.icon` file produced by Apple's Icon Composer.
 
-The repo includes the source assets you need:
+Try it: System Settings → Appearance → Icon style → switch between **Default**, **Dark**, **Clear**, and **Tinted**. Pixel Art Converter's dock icon updates instantly, just like Apple's native apps.
 
-| File | Layer / Purpose |
+### How it's wired in the bundle
+
+```
+Pixel Art Converter.app/
+└── Contents/
+    ├── Info.plist              CFBundleIconName = "AppIcon"
+    └── Resources/
+        ├── AppIcon.icon/       ← Tahoe layered icon (the new format)
+        │   ├── icon.json       ← gradient fill, glass layer, translucency
+        │   └── Assets/         ← foreground PNG
+        └── AppIcon.icns        ← classic .icns fallback for pre-Tahoe macOS
+```
+
+Tahoe checks `CFBundleIconName` first → finds `AppIcon.icon` → composites for the user's chosen style. Older macOS versions read `CFBundleIconFile` and fall back to `AppIcon.icns`.
+
+### Icon source assets in the repo
+
+| File | Purpose |
 |---|---|
-| `docs/icon.png` | Default light style — also the fallback for non-Tahoe systems |
-| `docs/icon-dark.png` | Dark style — same content, dark squircle |
-| `docs/icon-foreground.png` | Foreground layer (tree + grass on transparent BG) for Icon Composer |
-| `docs/icon-background.png` | Background layer (squircle alone) for Icon Composer |
-| `docs/icon-tinted.png` | White silhouette — used as the foreground for the Tinted style |
-| `docs/icon-clear.png` | Translucent variant — approximates the Clear style for non-Tahoe builds |
+| `docs/AppIcon.icon/` | The compiled Tahoe layered icon — copied into the bundle by `build_dmg.sh` |
+| `docs/icon.png` | Master 1024×1024 source — used to generate `AppIcon.icns` for pre-Tahoe |
+| `docs/icon-dark.png` | Dark variant — used at runtime by the Python source-mode app |
+| `docs/icon-foreground.png` | Foreground (tree+grass, transparent BG) — drag into Icon Composer if rebuilding `.icon` |
+| `docs/icon-background.png` | Background (squircle alone) — for Icon Composer rebuild |
+| `docs/icon-tinted.png` | White silhouette for the Tinted style foreground |
+| `docs/icon-clear.png` | Approximate Clear style for non-Tahoe builds |
 
-To produce a Tahoe-compatible icon for the packaged `.app`:
+### Rebuilding the layered `.icon` from source
 
-1. Open **Xcode → File → New → File from Template → macOS → Icon Composer Document** (or the standalone Icon Composer.app on Tahoe+).
-2. Drop `icon-foreground.png` into the **Foreground** layer and `icon-background.png` into the **Background** layer. For tinted style, use `icon-tinted.png` as the foreground.
-3. Export as `Icon.icon` and add to your Xcode app target's Asset Catalog (or place it directly in `YourApp.app/Contents/Resources/Icon.icon`).
-4. Build the `.app` and `.dmg`. The dock will now respect the user's icon-style preference.
+Open **Icon Composer** (standalone on Tahoe, or **Xcode → File → New → Icon Composer Document** in Xcode 16+):
 
-The currently-running Python script sets a single image via AppKit and **cannot** be restyled by the system at runtime — Tahoe icon styles are a packaging-time feature, not a runtime API. The script auto-picks `icon.png` (light) or `icon-dark.png` (dark) based on system appearance and that's the limit until you ship a proper bundle.
+1. Foreground layer: drop `docs/icon-foreground.png`
+2. Background fill: gradient from white to your accent color (or use a flat color)
+3. Optionally enable **glass** layer for the macOS-style polished look
+4. Export as `AppIcon.icon`, replace `docs/AppIcon.icon/`
+5. `./build_dmg.sh` will pick up the new layered icon automatically
 
 ## 🗺️ Roadmap
 

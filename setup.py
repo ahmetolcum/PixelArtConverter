@@ -28,13 +28,19 @@ DATA_FILES = [
 
 OPTIONS = {
     'argv_emulation': False,
-    'iconfile': 'build/icon.icns',
+    # iconfile points at a .icns for pre-Tahoe macOS. The Tahoe layered .icon
+    # is copied in post-build (py2app doesn't grok the .icon directory format).
+    'iconfile': 'build/AppIcon.icns',
     'plist': {
         'CFBundleName':                 'Pixel Art Converter',
         'CFBundleDisplayName':          'Pixel Art Converter',
         'CFBundleIdentifier':           'com.ahmetolcum.PixelArtConverter',
         'CFBundleVersion':              '1.0.0',
         'CFBundleShortVersionString':   '1.0.0',
+        # No extension — macOS Tahoe looks for AppIcon.icon first, falls back
+        # to AppIcon.icns on older systems.
+        'CFBundleIconFile':             'AppIcon',
+        'CFBundleIconName':             'AppIcon',
         'NSHighResolutionCapable':      True,
         'LSMinimumSystemVersion':       '11.0',
         'NSHumanReadableCopyright':     '© 2026 Ahmet Olcum. MIT licensed.',
