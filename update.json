@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
   "url": "https://raw.githubusercontent.com/ahmetolcum/PixelArtConverter/v1.0.0/pixel_art_converter.py",
-  "sha256": "REPLACE_WITH_SHA256_OF_THE_FILE_AT_url",
+  "sha256": "5c4c6ea86adb53dbe3c30f1e402046de17f4cdb4a06b0d4e6f052ffbfca94625",
   "notes": "Initial release.\n\n- Pixel art conversion (single + animation)\n- Lospec palette support\n- Edge-color background removal\n- Selective hue-aware outlining"
 }
