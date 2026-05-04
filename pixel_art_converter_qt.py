@@ -392,8 +392,10 @@ class PromptSamplesDialog(QtWidgets.QDialog):
 # ── Main window ───────────────────────────────────────────────────────
 
 class MainWindow(QtWidgets.QMainWindow):
-    convert_requested = QtCore.Signal(dict)
-    update_checked    = QtCore.Signal(object, str)  # manifest dict (or None), error str
+    convert_requested  = QtCore.Signal(dict)
+    update_checked     = QtCore.Signal(object, str)   # manifest dict (or None), error str
+    model_dl_progress  = QtCore.Signal(int, int)      # received bytes, total bytes
+    model_dl_done      = QtCore.Signal(str)           # error msg, "" on success
 
     def __init__(self):
         super().__init__()
@@ -871,6 +873,92 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             QtWidgets.QApplication.restoreOverrideCursor()
 
+    @staticmethod
+    def _rembg_model_path(model: str) -> str:
+        return os.path.join(os.path.expanduser("~"), ".u2net", f"{model}.onnx")
+
+    @staticmethod
+    def _rembg_model_url(model: str) -> str:
+        return ("https://github.com/danielgatis/rembg/releases/download/"
+                f"v0.0.0/{model}.onnx")
+
+    def _needs_model_download(self, args: dict) -> str | None:
+        """Return model name to download, or None if no download needed."""
+        if not args.get("remove_bg"):
+            return None
+        model = args.get("bg_model")
+        if not model or model == core.EDGE_COLOR_OPTION:
+            return None
+        path = self._rembg_model_path(model)
+        if os.path.exists(path) and os.path.getsize(path) > 1024 * 1024:
+            return None
+        return model
+
+    def _download_model_async(self, model: str, on_done):
+        """Show a progress dialog and download the model on a background thread.
+        Calls on_done(error_msg) on completion ("" on success)."""
+        url   = self._rembg_model_url(model)
+        dest  = self._rembg_model_path(model)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+        dlg = QtWidgets.QProgressDialog(
+            f"Downloading {model}.onnx (one-time, ~175 MB)…",
+            "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Downloading background-removal model")
+        dlg.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        cancel_flag = {"cancelled": False}
+        dlg.canceled.connect(lambda: cancel_flag.__setitem__("cancelled", True))
+
+        def on_progress(received: int, total: int):
+            if total > 0:
+                dlg.setMaximum(100)
+                dlg.setValue(int(received * 100 / total))
+            dlg.setLabelText(
+                f"Downloading {model}.onnx — "
+                f"{received / 1e6:.1f} / {total / 1e6:.1f} MB")
+
+        def on_complete(err: str):
+            dlg.close()
+            try: self.model_dl_progress.disconnect(on_progress)
+            except (RuntimeError, TypeError): pass
+            try: self.model_dl_done.disconnect(on_complete)
+            except (RuntimeError, TypeError): pass
+            on_done(err)
+
+        self.model_dl_progress.connect(on_progress)
+        self.model_dl_done.connect(on_complete)
+
+        def worker():
+            tmp = dest + ".part"
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "PixelArtConverter"})
+                with urllib.request.urlopen(req, timeout=30) as resp, \
+                     open(tmp, "wb") as f:
+                    total = int(resp.headers.get("Content-Length", 0))
+                    received = 0
+                    while True:
+                        if cancel_flag["cancelled"]:
+                            raise RuntimeError("cancelled")
+                        chunk = resp.read(64 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                        self.model_dl_progress.emit(received, total)
+                os.replace(tmp, dest)
+                self.model_dl_done.emit("")
+            except Exception as e:
+                try: os.remove(tmp)
+                except OSError: pass
+                self.model_dl_done.emit(str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     @QtCore.Slot()
     def do_convert(self):
         if self._busy:
@@ -878,6 +966,25 @@ class MainWindow(QtWidgets.QMainWindow):
         args = self._gather_args()
         if args is None:
             return
+
+        needed = self._needs_model_download(args)
+        if needed:
+            def after_dl(err: str):
+                if err == "cancelled":
+                    self.statusBar().showMessage("Model download cancelled.")
+                    return
+                if err:
+                    QtWidgets.QMessageBox.critical(
+                        self, "Model download failed",
+                        f"Could not download {needed}.onnx:\n\n{err}")
+                    return
+                self._launch_convert(args)
+            self._download_model_async(needed, after_dl)
+            return
+
+        self._launch_convert(args)
+
+    def _launch_convert(self, args: dict):
         self._set_busy(True)
         self.statusBar().showMessage("Converting…")
         self.convert_requested.emit(args)
