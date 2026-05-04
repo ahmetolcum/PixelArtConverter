@@ -79,9 +79,46 @@ jobs:
           path: ${{ matrix.asset_name }}
           if-no-files-found: error
 
+  build-macos:
+    name: Build (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install macOS build deps
+        run: |
+          python -m pip install --upgrade pip
+          # py2app + pyobjc are macOS-bundle-build only; runtime deps overlap
+          # with the Qt build but exclude PySide6 (not used by the AppKit app).
+          pip install py2app pyobjc-core pyobjc-framework-Cocoa
+          pip install numpy Pillow scikit-image scikit-learn scipy "rembg[cpu]"
+
+      - name: Build .app + DMG
+        run: |
+          chmod +x build_dmg.sh
+          ./build_dmg.sh
+
+      - name: Locate DMG
+        id: dmg
+        run: |
+          DMG=$(ls build/PixelArtConverter-*.dmg | head -1)
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: ${{ steps.dmg.outputs.path }}
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
