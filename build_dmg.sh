@@ -55,7 +55,18 @@ cp build/Assets.car "${APP_PATH}/Contents/Resources/Assets.car"
 plutil -replace CFBundleIconFile -string "AppIcon" "${APP_PATH}/Contents/Info.plist"
 plutil -replace CFBundleIconName -string "AppIcon" "${APP_PATH}/Contents/Info.plist"
 
-# 3b. Re-sign ad-hoc. Modifying the bundle after py2app's signing invalidates
+# 3c. Bundle the default rembg model so first-run users don't have to wait
+#     for a 170 MB download before they can use background removal. Other
+#     three models (isnet-anime, u2net, u2net_human_seg) still download
+#     lazily into ~/.u2net the way they always have.
+echo "▶ Bundling default rembg model (isnet-general-use)…"
+python3 -c "from rembg import new_session; new_session('isnet-general-use')" > /dev/null
+mkdir -p "${APP_PATH}/Contents/Resources/u2net"
+cp "${HOME}/.u2net/isnet-general-use.onnx" \
+   "${APP_PATH}/Contents/Resources/u2net/isnet-general-use.onnx"
+echo "  ✓ isnet-general-use.onnx ($(du -h "${APP_PATH}/Contents/Resources/u2net/isnet-general-use.onnx" | awk '{print $1}'))"
+
+# 3d. Re-sign ad-hoc. Modifying the bundle after py2app's signing invalidates
 #     the original signature, which Apple Silicon enforces — the app would
 #     SIGKILL on launch with "Code Signature Invalid".
 echo "▶ Re-signing bundle ad-hoc"

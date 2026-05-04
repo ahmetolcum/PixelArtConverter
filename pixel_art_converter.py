@@ -37,6 +37,31 @@ from Foundation import NSObject, NSData, NSMakeRect, NSMakePoint, NSString, NSPr
 from PIL import Image
 
 
+# ── Bundled rembg model seeding (py2app bundle only) ────────────────────
+# build_dmg.sh ships Resources/u2net/isnet-general-use.onnx (~170 MB) so the
+# first BG-removal on a fresh install doesn't trigger a network download.
+# Copy it into ~/.u2net once on first launch — that's where rembg looks AND
+# where it downloads the other 3 models lazily, so we keep one writable
+# cache path instead of pointing U2NET_HOME at a read-only bundle dir.
+def _seed_bundled_rembg_model():
+    here = os.path.dirname(os.path.abspath(__file__))
+    bundled = os.path.join(here, "u2net", "isnet-general-use.onnx")
+    if not os.path.isfile(bundled):
+        return  # running from source, or model not bundled — nothing to do
+    user_dir = os.path.expanduser(os.environ.get("U2NET_HOME", "~/.u2net"))
+    user_model = os.path.join(user_dir, "isnet-general-use.onnx")
+    if os.path.isfile(user_model):
+        return  # already seeded (or user-downloaded a newer copy)
+    try:
+        os.makedirs(user_dir, exist_ok=True)
+        import shutil
+        shutil.copy2(bundled, user_model)
+    except Exception:
+        pass  # silent — worst case rembg downloads on first use as before
+
+_seed_bundled_rembg_model()
+
+
 # ── Pure logic + shared config — extracted to core.py ────────────────────
 # Image processing, palette tables, prompt templates, presets, and shared
 # mutable state live in core.py so a future cross-platform GUI (Qt/Web) can
