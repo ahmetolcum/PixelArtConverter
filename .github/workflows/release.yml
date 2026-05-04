@@ -1,0 +1,97 @@
+name: Release
+
+# Builds the cross-platform Qt app for Windows and Linux and attaches both
+# binaries to a GitHub Release.
+#
+# Trigger:
+#   - Push a tag like `v1.3.0` -> automatic build + release
+#   - Or use the "Run workflow" button (workflow_dispatch) to test the build
+#     without creating a release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: PixelArtConverter-windows-x64.zip
+            bin: PixelArtConverter.exe
+          - os: ubuntu-latest
+            asset_name: PixelArtConverter-linux-x64.tar.gz
+            bin: PixelArtConverter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Linux Qt runtime deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb1 libfontconfig1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install PySide6 numpy Pillow scikit-image scikit-learn scipy "rembg[cpu]"
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm pixel_art_converter_qt.spec
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/${{ matrix.bin }}" `
+                           -DestinationPath "${{ matrix.asset_name }}"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x "dist/${{ matrix.bin }}"
+          tar -czvf "${{ matrix.asset_name }}" -C dist "${{ matrix.bin }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release and upload binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
