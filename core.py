@@ -179,7 +179,7 @@ _last_rembg_status = "ok"   # "ok" | "fallback" — read by the UI thread
 # ── App version + auto-update endpoint ────────────────────────────────────
 # Bump __version__ on every release. The update endpoint hosts a tiny JSON
 # manifest of the latest version + download URL + SHA256.
-__version__ = "1.2.0"
+__version__ = "2.0.0"
 _UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/ahmetolcum/"
     "PixelArtConverter/main/update.json"
