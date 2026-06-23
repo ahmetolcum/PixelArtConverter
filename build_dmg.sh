@@ -65,6 +65,32 @@ rm -rf "$APP_PATH" dist build/PixelArtConverter-*.dmg
 python3 setup.py py2app > /dev/null
 echo "  ✓ ${APP_PATH}"
 
+# 2b. Strip native binaries frozen inside python3X.zip. codesign cannot sign a
+#     Mach-O sitting inside a zip, and CPython cannot load one from there
+#     either — so these copies are unsigned dead weight that makes
+#     notarization fail. Removing them is behaviour-preserving (e.g. protobuf
+#     just keeps using its pure-Python impl). After stripping, verify none
+#     remain so a future new offender can't slip through to Apple.
+PYZIP=$(ls "${APP_PATH}/Contents/Resources/lib/"python*.zip 2>/dev/null | head -1)
+if [ -n "$PYZIP" ]; then
+  ZIPPED_BINS=$(unzip -Z1 "$PYZIP" 2>/dev/null | grep -E '\.(so|dylib)$' || true)
+  if [ -n "$ZIPPED_BINS" ]; then
+    echo "▶ Stripping unsignable native binaries from $(basename "$PYZIP"):"
+    echo "$ZIPPED_BINS" | sed 's/^/      /'
+    # zip -d takes the paths to delete; pass them as separate args.
+    echo "$ZIPPED_BINS" | while IFS= read -r entry; do
+      [ -n "$entry" ] && zip -q -d "$PYZIP" "$entry"
+    done
+  fi
+  REMAINING=$(unzip -Z1 "$PYZIP" 2>/dev/null | grep -E '\.(so|dylib)$' || true)
+  if [ -n "$REMAINING" ]; then
+    echo "  ✗ Could not strip these binaries from $(basename "$PYZIP"):" >&2
+    echo "$REMAINING" | sed 's/^/      /' >&2
+    exit 1
+  fi
+  echo "  ✓ No unsigned native binaries inside $(basename "$PYZIP")"
+fi
+
 # 3. Install the Tahoe layered icon: copy Assets.car and set CFBundleIconName.
 #    Without Assets.car + CFBundleIconName, Tahoe falls back to the flat .icns
 #    and ignores the layered/glass styling.

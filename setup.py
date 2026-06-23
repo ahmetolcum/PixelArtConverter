@@ -53,6 +53,13 @@ OPTIONS = {
     },
 
     # Top-level packages: py2app recursively picks up all submodules.
+    #
+    # NB: a few transitive deps (llvmlite's libllvmlite.dylib, protobuf's
+    # google/_upb/_message.abi3.so) get frozen into python3X.zip by py2app.
+    # CPython can't load a Mach-O from inside a zip anyway, so those copies are
+    # dead weight — and they're unsigned, which makes notarization fail. They
+    # are stripped from the zip in build_dmg.sh after the build. (Listing
+    # 'google' here doesn't work: it's a namespace package py2app can't unzip.)
     'packages': [
         'PIL',
         'numpy',
