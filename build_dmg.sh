@@ -7,8 +7,15 @@
 #   2. py2app builds the .app bundle (embeds the .icns via setup.py iconfile)
 #   3. Drop Assets.car into Resources and set CFBundleIconName so Tahoe loads
 #      the layered icon from the asset catalog at runtime
-#   4. hdiutil creates a UDZO-compressed DMG
+#   3d. Sign with Developer ID + hardened runtime (inside-out), with
+#      entitlements.plist on the .app wrapper
+#   4. hdiutil creates a UDZO-compressed DMG, which is then signed,
+#      notarized with Apple, and stapled
 #   5. Print the DMG SHA256 (paste into update.json + release notes)
+#
+# One-time setup before first run — store the notarization credential:
+#   xcrun notarytool store-credentials "pixelart-notary" \
+#     --apple-id <APPLE_ID> --team-id 78BY9DKNT2 --password <APP_SPECIFIC_PASSWORD>
 #
 # Usage:  ./build_dmg.sh
 
@@ -77,20 +84,57 @@ cp "${HOME}/.u2net/isnet-general-use.onnx" \
    "${APP_PATH}/Contents/Resources/u2net/isnet-general-use.onnx"
 echo "  ✓ isnet-general-use.onnx ($(du -h "${APP_PATH}/Contents/Resources/u2net/isnet-general-use.onnx" | awk '{print $1}'))"
 
-# 3d. Re-sign ad-hoc. Modifying the bundle after py2app's signing invalidates
-#     the original signature, which Apple Silicon enforces — the app would
-#     SIGKILL on launch with "Code Signature Invalid".
-echo "▶ Re-signing bundle ad-hoc"
-codesign --force --deep --sign - "${APP_PATH}" > /dev/null
-codesign --verify --verbose "${APP_PATH}" 2>&1 | head -2
+# 3d. Sign with Developer ID + hardened runtime so the app can be notarized.
+#     Modifying the bundle after py2app invalidates its signature anyway, so
+#     we re-sign from scratch here. Notarization requires EVERY embedded
+#     Mach-O to be signed with the hardened runtime (--options runtime) and a
+#     secure timestamp (--timestamp), signed inside-out (deepest nested
+#     binaries first, the .app wrapper last).
+#
+#     Override the identity / notary profile via env vars for CI:
+#       SIGN_IDENTITY="Developer ID Application: …"  NOTARY_PROFILE="…"
+SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Ahmet Olcum (78BY9DKNT2)}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-pixelart-notary}"
+ENTITLEMENTS="entitlements.plist"
 
-# 4. Build the DMG
+echo "▶ Signing nested binaries (inside-out) with: ${SIGN_IDENTITY}"
+# Sort by path depth descending so the deepest Mach-O files are signed first.
+while IFS= read -r f; do
+  if file "$f" | grep -q "Mach-O"; then
+    codesign --force --timestamp --options runtime \
+      --sign "${SIGN_IDENTITY}" "$f" >/dev/null 2>&1 || {
+        echo "  ✗ failed to sign nested binary: $f" >&2; exit 1; }
+  fi
+done < <(find "${APP_PATH}/Contents" -type f | awk '{print gsub(/\//,"/"), $0}' | sort -rn | cut -d' ' -f2-)
+
+echo "▶ Signing the .app bundle with entitlements"
+codesign --force --timestamp --options runtime \
+  --entitlements "${ENTITLEMENTS}" \
+  --sign "${SIGN_IDENTITY}" "${APP_PATH}" >/dev/null
+codesign --verify --deep --strict --verbose=2 "${APP_PATH}" 2>&1 | tail -2
+
+# 4. Build the DMG, then sign it too (the DMG itself is the distributed file).
 echo "▶ Creating DMG…"
 hdiutil create -volname "${APP_NAME}" \
   -srcfolder "${APP_PATH}" \
   -ov -format UDZO \
   "$DMG_PATH" > /dev/null
+codesign --force --timestamp --sign "${SIGN_IDENTITY}" "$DMG_PATH" >/dev/null
 echo "  ✓ ${DMG_PATH}"
+
+# 4b. Notarize the DMG with Apple, then staple the ticket so Gatekeeper
+#     accepts it offline. Requires a stored notarytool profile — create once:
+#       xcrun notarytool store-credentials "pixelart-notary" \
+#         --apple-id <APPLE_ID> --team-id 78BY9DKNT2 \
+#         --password <APP_SPECIFIC_PASSWORD>
+echo "▶ Notarizing (this can take a few minutes)…"
+xcrun notarytool submit "$DMG_PATH" \
+  --keychain-profile "${NOTARY_PROFILE}" \
+  --wait
+echo "▶ Stapling notarization ticket"
+xcrun stapler staple "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH"
+spctl -a -t open --context context:primary-signature -vv "$DMG_PATH" 2>&1 | head -3 || true
 
 # 5. Hash + size summary
 SHA=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
